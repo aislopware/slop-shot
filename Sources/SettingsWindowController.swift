@@ -71,6 +71,13 @@ private struct DestinationTab: View {
                 }
             }
 
+            Section("Selection") {
+                Toggle("Snap to window & item edges", isOn: $settings.snapToEdges)
+                Text("Hover to outline the window or item under the cursor, then click to grab it. Hold ⌥ while dragging for a free selection.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("After capture") {
                 Toggle("Also copy to clipboard", isOn: $settings.copyToClipboard)
                 Toggle("Show preview thumbnail", isOn: $settings.showThumbnail)

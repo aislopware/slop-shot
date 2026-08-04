@@ -63,6 +63,8 @@ final class AppSettings: ObservableObject {
     @Published var copyToClipboard: Bool   { didSet { d.set(copyToClipboard, forKey: K.copy) } }
     @Published var showThumbnail: Bool     { didSet { d.set(showThumbnail, forKey: K.thumb) } }
     @Published var imageFormat: ImageFormat { didSet { d.set(imageFormat.rawValue, forKey: K.format) } }
+    // Bắt dính khung chọn vào cạnh cửa sổ / biên item dò được trong ảnh.
+    @Published var snapToEdges: Bool       { didSet { d.set(snapToEdges, forKey: K.snap) } }
 
     // Không lưu UserDefaults — SMAppService.mainApp.status mới là nguồn sự thật
     // (user có thể tắt thủ công trong System Settings > Login Items).
@@ -118,6 +120,7 @@ final class AppSettings: ObservableObject {
     private enum K {
         static let folder = "save.folder", copy = "save.copy"
         static let thumb = "save.thumb", format = "save.format", hotkeys = "hotkeys"
+        static let snap = "select.snap"
     }
 
     private init() {
@@ -128,6 +131,7 @@ final class AppSettings: ObservableObject {
         copyToClipboard = (d.object(forKey: K.copy) as? Bool) ?? true
         showThumbnail   = (d.object(forKey: K.thumb) as? Bool) ?? true
         imageFormat     = ImageFormat(rawValue: d.string(forKey: K.format) ?? "png") ?? .png
+        snapToEdges     = (d.object(forKey: K.snap) as? Bool) ?? true
         if let raw = d.data(forKey: K.hotkeys),
            let saved = try? JSONDecoder().decode([String: Hotkey].self, from: raw) {
             hotkeyStore = saved

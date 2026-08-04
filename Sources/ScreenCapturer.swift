@@ -26,6 +26,7 @@ final class ScreenCapturer: ObservableObject {
     private let settings = AppSettings.shared                     // cấu hình (folder/format…)
     private let history = CaptureHistory.shared                   // lịch sử capture
     private let historyWindow = HistoryWindowController()
+    private let ocrWindow = OCRWindowController()                 // kết quả OCR + dịch
     private let settingsWindow = SettingsWindowController()
     private var recRect: CGRect = .zero      // vùng đang quay (để Restart)
     private var recScreen: NSScreen?         // màn hình đang quay
@@ -40,6 +41,59 @@ final class ScreenCapturer: ObservableObject {
         editor.dismiss()
         videoViewer.dismiss()
         videoTrimmer.dismiss()
+        ocrWindow.dismiss()
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Quyền Screen Recording.
+    //
+    // Thiếu quyền thì MỌI đường chụp đều ném lỗi, mà lỗi chỉ ghi vào lastStatus
+    // (nằm trong menu, không ai mở ra xem) → nhìn như "bấm phím tắt xong chả ra
+    // gì". Kiểm tra trước và nói thẳng ra bằng hộp thoại.
+    //
+    // Hay dính nhất là sau khi cài đè bản mới vào /Applications: macOS coi đó là
+    // một app khác nếu chữ ký đổi, quyền cũ không còn hiệu lực.
+    // ═══════════════════════════════════════════════════════════════════════
+    private func ensureScreenAccess() -> Bool {
+        if CGPreflightScreenCaptureAccess() { return true }
+
+        // Gọi cái này để macOS hiện hộp thoại xin quyền (chỉ hiện được 1 lần cho
+        // mỗi bản app; lần sau nó im nên vẫn phải tự chỉ đường bên dưới).
+        CGRequestScreenCaptureAccess()
+        lastStatus = "❌ Screen Recording permission is off — SlopShot can't capture anything."
+
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "SlopShot needs Screen Recording permission"
+        alert.informativeText = """
+            macOS is blocking screen capture, so every screenshot comes out empty.
+
+            Open System Settings › Privacy & Security › Screen & System Audio \
+            Recording, turn SlopShot on, then quit and reopen SlopShot.
+
+            If SlopShot is already listed and enabled, remove it with the “–” \
+            button and add it again — reinstalling the app invalidates the old entry.
+            """
+        alert.addButton(withTitle: "Open System Settings")
+        alert.addButton(withTitle: "Later")
+        if alert.runModal() == .alertFirstButtonReturn,
+           let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+            NSWorkspace.shared.open(url)
+        }
+        return false
+    }
+
+    /// Báo lỗi ra tận mặt thay vì chỉ nhét vào menu.
+    private func report(_ error: Error) {
+        lastStatus = "❌ \(error.localizedDescription)"
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Capture failed"
+        alert.informativeText = error.localizedDescription
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     // Mở editor cho ảnh gần nhất (gọi từ menu).
@@ -52,18 +106,16 @@ final class ScreenCapturer: ObservableObject {
     // BƯỚC 1: chụp toàn màn hình chính.
     // ═══════════════════════════════════════════════════════════════════════
     func captureFullScreen() async {
+        guard ensureScreenAccess() else { return }
         dismissOpenEditors()   // chụp mới → tự đóng editor cũ (không lưu), như CleanShot
-        // Ẩn thumbnail cũ để nó không lọt vào ảnh mới, đợi nó biến mất khỏi màn hình.
-        thumbnail.hide()
-        try? await Task.sleep(nanoseconds: 120_000_000)
+        thumbnail.hide()       // cửa sổ của chính app đã bị loại khỏi ảnh, khỏi cần chờ
 
         do {
             let screen = NSScreen.main ?? NSScreen.screens.first!
-            let display = try await shareableDisplay(for: screen)
-            let cgImage = try await captureImage(of: display, scale: screen.backingScaleFactor)
+            let cgImage = try await captureDisplay(on: screen)
             finishImage(cgImage, subtitle: "\(cgImage.width)×\(cgImage.height)px")
         } catch {
-            lastStatus = "❌ \(error.localizedDescription)\n→ Open System Settings › Privacy & Security › Screen Recording, enable SlopShot, then reopen the app."
+            report(error)
         }
     }
 
@@ -71,18 +123,19 @@ final class ScreenCapturer: ObservableObject {
     // BƯỚC 2: kéo chuột chọn vùng rồi chụp đúng vùng đó.
     // ═══════════════════════════════════════════════════════════════════════
     func captureRegion() async {
+        guard ensureScreenAccess() else { return }
         dismissOpenEditors()   // chụp mới → tự đóng editor cũ (không lưu)
-        // Chọn màn hình đang có con trỏ chuột (xài đa màn hình vẫn đúng).
-        let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
-            ?? NSScreen.main ?? NSScreen.screens.first!
-
-        // Ẩn thumbnail cũ để nó không lọt vào ảnh chụp.
+        let screen = screenUnderCursor()
         thumbnail.hide()
+
+        // ĐÓNG BĂNG màn hình NGAY lúc bấm phím tắt, TRƯỚC khi mở overlay.
+        // Nhờ vậy ảnh giữ đúng những gì đang thấy: app dưới có tự đóng lightbox,
+        // ẩn tooltip, đổi frame video… thì ảnh vẫn là khoảnh khắc lúc bấm phím.
+        let frozen = try? await captureDisplay(on: screen)
 
         // Bọc callback chọn vùng thành async/await cho gọn (continuation = "Promise" của Swift).
         let rectInScreen: CGRect? = await withCheckedContinuation { cont in
-            selection.begin(on: screen) { rect in
+            selection.begin(on: screen, frozen: frozen) { rect in
                 cont.resume(returning: rect)
             }
         }
@@ -92,14 +145,18 @@ final class ScreenCapturer: ObservableObject {
             return
         }
 
-        // Đợi overlay biến mất hẳn khỏi màn hình rồi mới chụp (~150ms).
-        try? await Task.sleep(nanoseconds: 150_000_000)
-
         do {
-            let cropped = try await captureCropped(rect: rect, on: screen)
+            // Có ảnh đóng băng thì chỉ việc cắt — không cần chụp lại, không cần chờ.
+            let cropped: CGImage
+            if let frozen {
+                cropped = try crop(frozen, to: rect, on: screen)
+            } else {
+                try? await Task.sleep(nanoseconds: 150_000_000)   // đợi overlay biến mất
+                cropped = try await captureCropped(rect: rect, on: screen)
+            }
             finishImage(cropped, subtitle: "\(cropped.width)×\(cropped.height)px")
         } catch {
-            lastStatus = "❌ \(error.localizedDescription)"
+            report(error)
         }
     }
 
@@ -107,32 +164,43 @@ final class ScreenCapturer: ObservableObject {
     // OCR: kéo chọn vùng → đọc chữ trong vùng → copy thẳng text vào clipboard.
     // ═══════════════════════════════════════════════════════════════════════
     func captureText() async {
+        guard ensureScreenAccess() else { return }
         dismissOpenEditors()
-        let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
-            ?? NSScreen.main ?? NSScreen.screens.first!
+        let screen = screenUnderCursor()
         thumbnail.hide()
+        let frozen = try? await captureDisplay(on: screen)
 
         let rect: CGRect? = await withCheckedContinuation { cont in
-            selection.begin(on: screen) { cont.resume(returning: $0) }
+            selection.begin(on: screen, frozen: frozen) { cont.resume(returning: $0) }
         }
         guard let rect else { lastStatus = "Text capture cancelled."; return }
-        try? await Task.sleep(nanoseconds: 150_000_000)
 
         do {
-            let cropped = try await captureCropped(rect: rect, on: screen)
-            let text = await TextRecognizer.recognize(in: cropped)
-            guard !text.isEmpty else { lastStatus = "No text found in the selected area."; return }
+            let cropped: CGImage
+            if let frozen {
+                cropped = try crop(frozen, to: rect, on: screen)
+            } else {
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                cropped = try await captureCropped(rect: rect, on: screen)
+            }
+            let ocr = await TextRecognizer.scan(in: cropped)
+            guard !ocr.isEmpty else { lastStatus = "No text found in the selected area."; return }
 
+            let copyText = ocr.copyText
             let pb = NSPasteboard.general
             pb.clearContents()
-            pb.setString(text, forType: .string)
-            let count = text.count
-            history.add(kind: .text, fileURL: nil, text: text,
+            pb.setString(copyText, forType: .string)
+            let count = copyText.count
+            history.add(kind: .text, fileURL: nil, text: copyText,
                         subtitle: "\(count) chars", thumbnail: nil)
+
+            // Hiện cửa sổ kết quả: đối chiếu ảnh ↔ chữ, sửa tay, dịch.
+            let preview = NSImage(cgImage: cropped,
+                                  size: NSSize(width: cropped.width, height: cropped.height))
+            ocrWindow.show(result: ocr, image: preview)
             lastStatus = "✅ Copied \(count) character\(count == 1 ? "" : "s") of text to clipboard."
         } catch {
-            lastStatus = "❌ \(error.localizedDescription)"
+            report(error)
         }
     }
 
@@ -140,14 +208,14 @@ final class ScreenCapturer: ObservableObject {
     // CHỤP CUỘN: chọn vùng → vừa cuộn vừa chụp → ghép thành 1 ảnh dài.
     // ═══════════════════════════════════════════════════════════════════════
     func captureScrollingArea() async {
+        guard ensureScreenAccess() else { return }
         dismissOpenEditors()
-        let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
-            ?? NSScreen.main ?? NSScreen.screens.first!
+        let screen = screenUnderCursor()
         thumbnail.hide()
+        let frozen = try? await captureDisplay(on: screen)
 
         let rect: CGRect? = await withCheckedContinuation { cont in
-            selection.begin(on: screen) { cont.resume(returning: $0) }
+            selection.begin(on: screen, frozen: frozen) { cont.resume(returning: $0) }
         }
         guard let rect else { lastStatus = "Scrolling capture cancelled."; return }
         try? await Task.sleep(nanoseconds: 150_000_000)
@@ -188,20 +256,19 @@ final class ScreenCapturer: ObservableObject {
     // BƯỚC 3: QUAY VIDEO 1 vùng màn hình. Bấm lần nữa (hoặc nút ⏹) để dừng.
     // ═══════════════════════════════════════════════════════════════════════
     func recordRegion() async {
+        guard ensureScreenAccess() else { return }
         // Đang quay → coi như lệnh dừng (để phím tắt bật/tắt cùng 1 tổ hợp).
         if isRecording { await stopRecording(); return }
         dismissOpenEditors()   // bắt đầu quay mới → đóng editor cũ (không lưu)
 
         // Chọn màn hình đang có con trỏ (giống captureRegion).
-        let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
-            ?? NSScreen.main ?? NSScreen.screens.first!
-
+        let screen = screenUnderCursor()
         thumbnail.hide()
 
-        // Kéo chuột chọn vùng (tái dùng overlay của chụp ảnh).
+        // Kéo chuột chọn vùng (tái dùng overlay của chụp ảnh, có cả bắt dính).
+        let frozen = try? await captureDisplay(on: screen)
         let rect: CGRect? = await withCheckedContinuation { cont in
-            selection.begin(on: screen) { cont.resume(returning: $0) }
+            selection.begin(on: screen, frozen: frozen) { cont.resume(returning: $0) }
         }
         guard let rect else { lastStatus = "Recording cancelled."; return }
 
@@ -488,8 +555,12 @@ final class ScreenCapturer: ObservableObject {
         saveHistoryItemToFolder(url)
     }
 
-    // Mở editor cho 1 ảnh trong lịch sử.
+    // Mở lại 1 mục lịch sử: ảnh → editor, chữ → cửa sổ OCR (để dịch lại).
     private func historyEdit(_ item: HistoryItem) {
+        if item.kind == .text, let text = item.text {
+            ocrWindow.show(result: OCRResult(text: text, qrCodes: []), image: nil)
+            return
+        }
         guard item.kind == .image, let url = item.fileURL,
               let img = NSImage(contentsOf: url) else { return }
         editor.open(image: img, sourceURL: url)
@@ -499,46 +570,33 @@ final class ScreenCapturer: ObservableObject {
     // Hàm dùng chung
     // ═══════════════════════════════════════════════════════════════════════
 
-    // Tìm SCDisplay (ScreenCaptureKit) tương ứng với 1 NSScreen.
+    // Màn hình đang có con trỏ chuột (xài đa màn hình vẫn đúng).
+    private func screenUnderCursor() -> NSScreen {
+        let mouse = NSEvent.mouseLocation
+        return NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
+            ?? NSScreen.main ?? NSScreen.screens.first!
+    }
+
+    // Chụp nguyên 1 màn hình → CGImage (đúng độ phân giải pixel theo scale).
     // Dòng SCShareableContent cũng là chỗ macOS xin quyền Screen Recording lần đầu.
-    private func shareableDisplay(for screen: NSScreen) async throws -> SCDisplay {
+    //
+    // Cửa sổ của CHÍNH SlopShot (thumbnail, overlay, thanh recording…) bị loại
+    // khỏi ảnh ngay từ bộ lọc → khỏi phải "ẩn rồi ngủ 120ms" cầu may như trước.
+    private func captureDisplay(on screen: NSScreen) async throws -> CGImage {
         let content = try await SCShareableContent.excludingDesktopWindows(
             false, onScreenWindowsOnly: false
         )
-        if let match = content.displays.first(where: { $0.displayID == screen.displayID }) {
-            return match
-        }
-        guard let any = content.displays.first else {
+        guard let display = content.displays.first(where: { $0.displayID == screen.displayID })
+                ?? content.displays.first else {
             throw NSError(domain: "SlopShot", code: 3,
                           userInfo: [NSLocalizedDescriptionKey: "No display found."])
         }
-        return any
-    }
-
-    // Chụp toàn màn hình rồi CẮT đúng vùng `rect` (points) → CGImage vùng đó.
-    // Dùng chung cho chụp vùng + OCR.
-    private func captureCropped(rect: CGRect, on screen: NSScreen) async throws -> CGImage {
-        let scale = screen.backingScaleFactor
-        let display = try await shareableDisplay(for: screen)
-        let cgFull = try await captureImage(of: display, scale: scale)
-
-        // Đổi rect (points, gốc trên-trái) → rect pixel để cắt ảnh.
-        let pixelRect = CGRect(x: rect.minX * scale, y: rect.minY * scale,
-                               width: rect.width * scale, height: rect.height * scale)
-        // Cắt cho an toàn trong biên ảnh.
-        let imageBounds = CGRect(x: 0, y: 0, width: cgFull.width, height: cgFull.height)
-        let safeRect = pixelRect.intersection(imageBounds).integral
-
-        guard let cropped = cgFull.cropping(to: safeRect) else {
-            throw NSError(domain: "SlopShot", code: 2,
-                          userInfo: [NSLocalizedDescriptionKey: "Couldn't crop the selected area."])
+        let me = content.applications.filter {
+            $0.bundleIdentifier == Bundle.main.bundleIdentifier
         }
-        return cropped
-    }
-
-    // Chụp nguyên 1 display → CGImage (đúng độ phân giải pixel theo scale).
-    private func captureImage(of display: SCDisplay, scale: CGFloat) async throws -> CGImage {
-        let filter = SCContentFilter(display: display, excludingWindows: [])
+        let filter = SCContentFilter(display: display,
+                                     excludingApplications: me, exceptingWindows: [])
+        let scale = screen.backingScaleFactor
         let config = SCStreamConfiguration()
         config.width  = Int(CGFloat(display.width)  * scale)
         config.height = Int(CGFloat(display.height) * scale)
@@ -546,6 +604,30 @@ final class ScreenCapturer: ObservableObject {
         return try await SCScreenshotManager.captureImage(
             contentFilter: filter, configuration: config
         )
+    }
+
+    // Cắt 1 vùng (points, gốc trên-trái màn hình) ra khỏi ảnh full màn hình.
+    // Tỉ lệ point→pixel lấy TỪ CHÍNH ảnh (không dùng backingScaleFactor) để màn
+    // hình ngoài / độ phân giải scale lạ vẫn cắt đúng chỗ.
+    private func crop(_ full: CGImage, to rect: CGRect, on screen: NSScreen) throws -> CGImage {
+        let scale = CGFloat(full.width) / max(screen.frame.width, 1)
+        let pixelRect = CGRect(x: rect.minX * scale, y: rect.minY * scale,
+                               width: rect.width * scale, height: rect.height * scale)
+        let imageBounds = CGRect(x: 0, y: 0, width: full.width, height: full.height)
+        let safeRect = pixelRect.intersection(imageBounds).integral
+        guard safeRect.width >= 1, safeRect.height >= 1,
+              let cropped = full.cropping(to: safeRect) else {
+            throw NSError(domain: "SlopShot", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "Couldn't crop the selected area."])
+        }
+        return cropped
+    }
+
+    // Chụp lại màn hình rồi CẮT đúng vùng `rect` — đường lui khi không có ảnh
+    // đóng băng (vd. lần đầu chưa được cấp quyền nên chụp trước đó lỗi).
+    private func captureCropped(rect: CGRect, on screen: NSScreen) async throws -> CGImage {
+        let cgFull = try await captureDisplay(on: screen)
+        return try crop(cgFull, to: rect, on: screen)
     }
 
     // Đổi CGImage → PNG → ghi vào THƯ MỤC TẠM (chưa lưu chính thức).
