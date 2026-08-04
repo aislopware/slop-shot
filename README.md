@@ -20,6 +20,7 @@
 ## Features
 
 - **Capture** — full screen, drag-to-select region, **scrolling capture** (image stitching + Accessibility scroll-offset), and **text capture** (Vision OCR).
+- **OCR result window** — recognized text next to the captured image, editable, with **QR code** detection and one-click **translation** into 24 languages via Apple's on-device Translation framework (no API key, works offline once the language pack is downloaded).
 - **Screen recording** — record a region to `.mov`, with pause/resume, restart, and discard.
 - **Annotation editor** — shapes, text, arrows; zoom via buttons, `⌘ +/-/0`, and trackpad pinch.
 - **Floating preview card** — Copy / Save / Share / Pin, drag-out to other apps.

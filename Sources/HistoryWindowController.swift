@@ -164,7 +164,7 @@ private struct HistoryRow: View {
                 switch item.kind {
                 case .image: iconButton("pencil.tip.crop.circle", "Edit") { actions.edit(item) }
                 case .video: iconButton("play.fill", "Play") { actions.open(item) }
-                case .text:  EmptyView()
+                case .text:  iconButton("character.bubble", "Open & translate") { actions.edit(item) }
                 }
                 iconButton("trash", "Delete") { actions.delete(item) }
             }
