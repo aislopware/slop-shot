@@ -62,6 +62,7 @@ final class SelectionView: NSView {
     private var guideXs: [CGFloat] = []     // đường gióng khi cạnh bị hút
     private var guideYs: [CGFloat] = []
 
+    private let dragThreshold: CGFloat = 4  // xê dưới mức này vẫn tính là "bấm", không phải "kéo"
     private let snapRadius: CGFloat = 9     // bán kính hút (points) — macshot chỉ 4
 
     // Lật trục y: gốc toạ độ về góc TRÊN-trái, khớp với ảnh CGImage → đỡ phải convert.
@@ -409,8 +410,14 @@ final class SelectionView: NSView {
         guard let start = startPoint else { return }
         cursor = convert(event.locationInWindow, from: nil)
         freeMode = event.modifierFlags.contains(.option)
-        dragging = true
-        hover = nil
+        // Bấm chuột bao giờ cũng xê vài pixel (trackpad càng rõ). Chỉ tính là KÉO
+        // khi vượt ngưỡng — chưa vượt thì giữ nguyên `hover`, để thả ra vẫn chụp
+        // được đúng cửa sổ đang khoanh thay vì bị huỷ.
+        if !dragging {
+            guard hypot(cursor.x - start.x, cursor.y - start.y) >= dragThreshold else { return }
+            dragging = true
+            hover = nil
+        }
         currentRect = rect(from: start, to: cursor)
         needsDisplay = true
     }
