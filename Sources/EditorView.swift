@@ -95,6 +95,7 @@ struct EditorView: View {
     @State private var status: String = ""
     @State private var showColorPopover = false
     @State private var showWidthPopover = false
+    @State private var showStickerPopover = false
     @FocusState private var textFocused: Bool
 
     init(image: NSImage, sourceURL: URL?, onClose: (() -> Void)? = nil) {
@@ -172,19 +173,29 @@ struct EditorView: View {
     // giữ đúng tỉ lệ ảnh gốc. Trả về false nếu clipboard không có ảnh.
     private func pasteImage() -> Bool {
         guard let img = Self.imageFromClipboard() else { return false }
+        placeImage(img, widthFraction: 0.5, note: "Pasted image")
+        return true
+    }
+
+    // Đặt 1 ảnh thành layer .image ở giữa canvas, giữ đúng tỉ lệ ảnh gốc.
+    // Dùng chung cho ⌘V (ảnh clipboard) và cho sticker.
+    private func placeImage(_ img: NSImage, widthFraction: CGFloat, note: String) {
         let baseW = max(image.size.width, 1), baseH = max(image.size.height, 1)
         let imgW = max(img.size.width, 1), imgH = max(img.size.height, 1)
         // Toạ độ normalized tính theo ảnh nền → phải quy đổi để ảnh dán không bị méo.
-        let nw: CGFloat = 0.5
-        let nh = (nw * baseW) * (imgH / imgW) / baseH
+        var nw = widthFraction
+        var nh = (nw * baseW) * (imgH / imgW) / baseH
+        if nh > 0.8 { let k = 0.8 / nh; nw *= k; nh *= k }   // ảnh quá cao → thu cho vừa khung
         let topLeft = CGPoint(x: 0.5 - nw / 2, y: 0.5 - nh / 2)
         let bottomRight = CGPoint(x: 0.5 + nw / 2, y: 0.5 + nh / 2)
-        annotations.append(Annotation(tool: .image, color: .clear, lineWidth: 0,
-                                      points: [topLeft, bottomRight], image: img))
+        let a = Annotation(tool: .image, color: .clear, lineWidth: 0,
+                           points: [topLeft, bottomRight], image: img)
+        annotations.append(a)
         redoStack.removeAll(); clearedBackup = nil
-        tool = .select   // chuyển sang Select để kéo chỉnh vị trí ảnh ngay
-        status = "Pasted image"
-        return true
+        tool = .select        // chuyển sang Select để kéo chỉnh vị trí ngay
+        selectedID = a.id     // chọn sẵn → hiện 4 handle, resize được luôn
+        editingID = nil
+        status = note
     }
 
     // Lấy ẢNH THẬT từ clipboard, xử lý cả khi copy FILE từ Finder.
@@ -316,6 +327,7 @@ struct EditorView: View {
             toolbarTools
             colorControl
             widthControl
+            stickerControl
             undoButton
             clearButton
             imageTransformControls   // luôn hiện: có chọn ảnh→đổi ảnh đó, không→đổi ảnh nền
@@ -438,6 +450,28 @@ struct EditorView: View {
                 }
             }
             .padding(8)
+        }
+    }
+
+    // ── Sticker: icon mặt cười → popover chọn bộ + sticker ─────────────────
+    // Chèn xong là 1 layer .image bình thường: kéo, resize góc, lật, xoay, Undo.
+    private var stickerControl: some View {
+        Button { showStickerPopover.toggle() } label: {
+            Image(systemName: "face.smiling")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Color(white: 0.85))
+                .frame(width: 30, height: 30)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+        .help("Stickers")
+        .popover(isPresented: $showStickerPopover, arrowEdge: .bottom) {
+            StickerPicker { img, name in
+                haptic()
+                placeImage(img, widthFraction: 0.28, note: "Added sticker “\(name)”")
+                showStickerPopover = false
+            }
         }
     }
 
@@ -823,7 +857,9 @@ struct EditorView: View {
                     layer.translateBy(x: r.midX, y: r.midY)
                     layer.rotate(by: .degrees(Double(a.rotation) * 90))
                     layer.scaleBy(x: a.flipH ? -1 : 1, y: a.flipV ? -1 : 1)
-                    layer.draw(Image(nsImage: img),
+                    // .high như ảnh nền: sticker/ảnh dán thường nhỏ hơn khung vẽ
+                    // nhiều lần, để nội suy mặc định là nhoè hẳn.
+                    layer.draw(Image(nsImage: img).interpolation(.high),
                                in: CGRect(x: -dw / 2, y: -dh / 2, width: dw, height: dh))
                 }
             }
