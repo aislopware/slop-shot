@@ -49,7 +49,7 @@ struct Hotkey: Codable, Equatable {
 // Các hành động có thể gán phím tắt. Mỗi cái có tiêu đề + phím mặc định.
 // ─────────────────────────────────────────────────────────────────────────
 enum ShortcutAction: String, CaseIterable, Identifiable {
-    case captureArea, captureFullscreen, recordArea, captureText, captureScrolling
+    case captureArea, captureFullscreen, recordArea, captureText, captureScrolling, pickColor
     var id: String { rawValue }
 
     var title: String {
@@ -59,6 +59,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .recordArea:       return "Record Area"
         case .captureText:      return "Capture Text (OCR)"
         case .captureScrolling: return "Capture Scrolling Area"
+        case .pickColor:        return "Pick Color"
         }
     }
 
@@ -70,6 +71,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .recordArea:       return Hotkey(keyCode: 23, modifiers: mods)   // 5
         case .captureText:      return Hotkey(keyCode: 22, modifiers: mods)   // 6
         case .captureScrolling: return Hotkey(keyCode: 26, modifiers: mods)   // 7
+        case .pickColor:        return Hotkey(keyCode: 28, modifiers: mods)   // 8
         }
     }
 }

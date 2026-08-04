@@ -58,6 +58,69 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    // Kiểu chuỗi màu mà Color Picker chép vào clipboard.
+    enum ColorFormat: String, CaseIterable, Identifiable {
+        case hex, hexLower, rgb, hsl, swiftUI, nsColor
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .hex:      return "HEX  #A4773F"
+            case .hexLower: return "hex  #a4773f"
+            case .rgb:      return "CSS  rgb(…)"
+            case .hsl:      return "CSS  hsl(…)"
+            case .swiftUI:  return "SwiftUI Color"
+            case .nsColor:  return "AppKit NSColor"
+            }
+        }
+
+        /// Tên ngắn hiện cạnh giá trị lúc đang chọn màu.
+        var shortLabel: String {
+            switch self {
+            case .hex:      return "HEX"
+            case .hexLower: return "hex"
+            case .rgb:      return "RGB"
+            case .hsl:      return "HSL"
+            case .swiftUI:  return "SwiftUI"
+            case .nsColor:  return "NSColor"
+            }
+        }
+
+        func string(from color: NSColor) -> String {
+            let c = color.usingColorSpace(.sRGB) ?? color
+            let r = c.redComponent, g = c.greenComponent, b = c.blueComponent
+            let r8 = Int((r * 255).rounded()), g8 = Int((g * 255).rounded()), b8 = Int((b * 255).rounded())
+            switch self {
+            case .hex:      return String(format: "#%02X%02X%02X", r8, g8, b8)
+            case .hexLower: return String(format: "#%02x%02x%02x", r8, g8, b8)
+            case .rgb:      return "rgb(\(r8), \(g8), \(b8))"
+            case .hsl:
+                let (h, s, l) = Self.hsl(r, g, b)
+                return "hsl(\(Int(h.rounded())), \(Int((s * 100).rounded()))%, \(Int((l * 100).rounded()))%)"
+            case .swiftUI:
+                return String(format: "Color(red: %.3f, green: %.3f, blue: %.3f)", r, g, b)
+            case .nsColor:
+                return String(format: "NSColor(srgbRed: %.3f, green: %.3f, blue: %.3f, alpha: 1)", r, g, b)
+            }
+        }
+
+        // RGB (0…1) → HSL: hue độ, saturation/lightness tỉ lệ 0…1.
+        private static func hsl(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> (CGFloat, CGFloat, CGFloat) {
+            let mx = max(r, g, b), mn = min(r, g, b)
+            let l = (mx + mn) / 2
+            guard mx > mn else { return (0, 0, l) }           // xám: hue vô nghĩa
+            let d = mx - mn
+            let s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn)
+            var h: CGFloat
+            switch mx {
+            case r:  h = (g - b) / d + (g < b ? 6 : 0)
+            case g:  h = (b - r) / d + 2
+            default: h = (r - g) / d + 4
+            }
+            return (h * 60, s, l)
+        }
+    }
+
     // Thư mục lưu (lưu dạng path, expand ~ khi dùng). App không sandbox nên path trần là đủ.
     @Published var saveFolderPath: String { didSet { d.set(saveFolderPath, forKey: K.folder) } }
     @Published var copyToClipboard: Bool   { didSet { d.set(copyToClipboard, forKey: K.copy) } }
@@ -65,6 +128,8 @@ final class AppSettings: ObservableObject {
     @Published var imageFormat: ImageFormat { didSet { d.set(imageFormat.rawValue, forKey: K.format) } }
     // Bắt dính khung chọn vào cạnh cửa sổ / biên item dò được trong ảnh.
     @Published var snapToEdges: Bool       { didSet { d.set(snapToEdges, forKey: K.snap) } }
+    // Kiểu chuỗi màu Color Picker chép ra (đổi được ngay lúc đang chọn bằng ← →).
+    @Published var colorFormat: ColorFormat { didSet { d.set(colorFormat.rawValue, forKey: K.color) } }
 
     // Không lưu UserDefaults — SMAppService.mainApp.status mới là nguồn sự thật
     // (user có thể tắt thủ công trong System Settings > Login Items).
@@ -120,7 +185,7 @@ final class AppSettings: ObservableObject {
     private enum K {
         static let folder = "save.folder", copy = "save.copy"
         static let thumb = "save.thumb", format = "save.format", hotkeys = "hotkeys"
-        static let snap = "select.snap"
+        static let snap = "select.snap", color = "pick.color.format"
     }
 
     private init() {
@@ -132,6 +197,7 @@ final class AppSettings: ObservableObject {
         showThumbnail   = (d.object(forKey: K.thumb) as? Bool) ?? true
         imageFormat     = ImageFormat(rawValue: d.string(forKey: K.format) ?? "png") ?? .png
         snapToEdges     = (d.object(forKey: K.snap) as? Bool) ?? true
+        colorFormat     = ColorFormat(rawValue: d.string(forKey: K.color) ?? "hex") ?? .hex
         if let raw = d.data(forKey: K.hotkeys),
            let saved = try? JSONDecoder().decode([String: Hotkey].self, from: raw) {
             hotkeyStore = saved

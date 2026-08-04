@@ -133,7 +133,8 @@ private struct HistoryRow: View {
                         .frame(width: 56, height: 40)
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                 } else {
-                    Image(systemName: item.kind == .text ? "text.alignleft" : "photo")
+                    Image(systemName: item.kind == .text ? "text.alignleft"
+                                    : item.kind == .color ? "eyedropper" : "photo")
                         .foregroundStyle(.secondary)
                 }
                 // Badge ▶ cho video.
@@ -158,13 +159,14 @@ private struct HistoryRow: View {
             // Nút thao tác (hiện rõ khi hover cho gọn).
             HStack(spacing: 6) {
                 iconButton("doc.on.doc", "Copy") { actions.copy(item) }
-                if item.kind != .text {
+                if item.kind != .text, item.kind != .color {
                     iconButton("square.and.arrow.down", "Save as…") { actions.saveAs(item) }
                 }
                 switch item.kind {
                 case .image: iconButton("pencil.tip.crop.circle", "Edit") { actions.edit(item) }
                 case .video: iconButton("play.fill", "Play") { actions.open(item) }
                 case .text:  iconButton("character.bubble", "Open & translate") { actions.edit(item) }
+                case .color: EmptyView()   // chép mã màu là xong, không có gì để mở
                 }
                 iconButton("trash", "Delete") { actions.delete(item) }
             }

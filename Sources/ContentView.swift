@@ -32,6 +32,11 @@ struct MenuContent: View {
             }
             .shortcut(settings.hotkey(for: .captureText))
 
+            Button { Task { await capturer.pickColor() } } label: {
+                Label("Pick Color", systemImage: "eyedropper")
+            }
+            .shortcut(settings.hotkey(for: .pickColor))
+
             if capturer.isRecording {
                 Button { Task { await capturer.stopRecording() } } label: {
                     Label("Stop Recording", systemImage: "stop.circle")

@@ -27,6 +27,7 @@ final class ScreenCapturer: ObservableObject {
     private let history = CaptureHistory.shared                   // lịch sử capture
     private let historyWindow = HistoryWindowController()
     private let ocrWindow = OCRWindowController()                 // kết quả OCR + dịch
+    private let colorPicker = ColorPickerController()             // hút màu trên màn hình
     private let settingsWindow = SettingsWindowController()
     private var recRect: CGRect = .zero      // vùng đang quay (để Restart)
     private var recScreen: NSScreen?         // màn hình đang quay
@@ -202,6 +203,50 @@ final class ScreenCapturer: ObservableObject {
         } catch {
             report(error)
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Hút màu: đóng băng màn hình → soi từng pixel → chép mã màu ra clipboard.
+    // ═══════════════════════════════════════════════════════════════════════
+    func pickColor() async {
+        guard ensureScreenAccess() else { return }
+        dismissOpenEditors()
+        let screen = screenUnderCursor()
+        thumbnail.hide()
+
+        // Không có ảnh đóng băng thì không đọc được pixel nào — khác các luồng
+        // chụp khác, ở đây không có đường lui nào cả.
+        guard let frozen = try? await captureDisplay(on: screen) else {
+            report(NSError(domain: "SlopShot", code: 4, userInfo: [
+                NSLocalizedDescriptionKey: "Couldn't read the screen to pick a color from."]))
+            return
+        }
+
+        let picked: NSColor? = await withCheckedContinuation { cont in
+            colorPicker.begin(on: screen, frozen: frozen) { cont.resume(returning: $0) }
+        }
+        guard let color = picked else { lastStatus = "Color pick cancelled."; return }
+
+        // Đọc định dạng SAU khi chọn xong: user đổi bằng ← → lúc đang soi thì
+        // chép ra đúng cái họ đang nhìn thấy.
+        let text = settings.colorFormat.string(from: color)
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+
+        history.add(kind: .color, fileURL: nil, text: text,
+                    subtitle: OverlayChrome.hex(of: color), thumbnail: swatch(color))
+        lastStatus = "\u{2705} Copied \(text) to clipboard."
+    }
+
+    // Ô màu đặc làm thumbnail cho dòng lịch sử.
+    private func swatch(_ color: NSColor) -> NSImage {
+        let img = NSImage(size: NSSize(width: 56, height: 40))
+        img.lockFocus()
+        color.setFill()
+        NSRect(x: 0, y: 0, width: 56, height: 40).fill()
+        img.unlockFocus()
+        return img
     }
 
     // ═══════════════════════════════════════════════════════════════════════

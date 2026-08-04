@@ -22,6 +22,7 @@
 - **Capture** — full screen, drag-to-select region, **scrolling capture** (image stitching + Accessibility scroll-offset), and **text capture** (Vision OCR).
 - **OCR result window** — recognized text next to the captured image, editable, with **QR code** detection and one-click **translation** into 24 languages via Apple's on-device Translation framework (no API key, works offline once the language pack is downloaded).
 - **Smart region selection** — the screen freezes the instant you hit the hotkey (so nothing under the overlay can change, and apps never lose their focused state), with a pixel loupe, **window snapping**, and **item snapping**: hover to outline the button / card / panel under the cursor and click to grab it. Hold `⌥` for a free selection.
+- **Color picker** — freeze the screen and magnify it 12× to land on the exact pixel (arrow keys nudge one pixel at a time), then click to copy as HEX, `rgb()`, `hsl()`, SwiftUI `Color` or `NSColor` — `←`/`→` switches format without leaving the picker.
 - **Screen recording** — record a region to `.mov`, with pause/resume, restart, and discard.
 - **Annotation editor** — shapes, text, arrows; zoom via buttons, `⌘ +/-/0`, and trackpad pinch.
 - **Floating preview card** — Copy / Save / Share / Pin, drag-out to other apps.

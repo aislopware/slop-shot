@@ -78,6 +78,17 @@ private struct DestinationTab: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Color picker") {
+                Picker("Copy color as", selection: $settings.colorFormat) {
+                    ForEach(AppSettings.ColorFormat.allCases) { fmt in
+                        Text(fmt.label).tag(fmt)
+                    }
+                }
+                Text("Press ← → while picking to switch format without leaving the screen.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("After capture") {
                 Toggle("Also copy to clipboard", isOn: $settings.copyToClipboard)
                 Toggle("Show preview thumbnail", isOn: $settings.showThumbnail)

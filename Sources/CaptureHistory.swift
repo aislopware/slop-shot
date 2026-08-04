@@ -2,7 +2,7 @@ import SwiftUI
 
 // 1 mục trong lịch sử. Codable để ghi JSON; thumbnail lưu riêng ra file PNG nhỏ.
 struct HistoryItem: Identifiable, Codable {
-    enum Kind: String, Codable { case image, video, text }
+    enum Kind: String, Codable { case image, video, text, color }
     let id: UUID
     let kind: Kind
     let date: Date
@@ -16,6 +16,7 @@ struct HistoryItem: Identifiable, Codable {
         case .image: return "Screenshot"
         case .video: return "Recording"
         case .text:  return "Text (OCR)"
+        case .color: return "Color"
         }
     }
     var thumbFileName: String { id.uuidString + ".png" }

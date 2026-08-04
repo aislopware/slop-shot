@@ -76,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .recordArea:       await capturer.recordRegion()
         case .captureText:      await capturer.captureText()
         case .captureScrolling: await capturer.captureScrollingArea()
+        case .pickColor:        await capturer.pickColor()
         }
     }
 }
