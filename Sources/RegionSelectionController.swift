@@ -85,19 +85,11 @@ final class SelectionView: NSView {
     // ── Vẽ ───────────────────────────────────────────────────────────────
     //
     // Bảng màu & khoảng cách gom về một chỗ cho dễ chỉnh.
-    private enum Style {
-        static let dimAlpha: CGFloat = 0.42          // độ tối của lớp phủ
-        static let chipFill  = NSColor(srgbRed: 0.08, green: 0.09, blue: 0.11, alpha: 0.92)
-        static let chipEdge  = NSColor(white: 1, alpha: 0.14)
-        static let guide     = NSColor(srgbRed: 0.24, green: 0.86, blue: 0.79, alpha: 1)
-        static let radius: CGFloat = 8
-    }
-
     override func draw(_ dirtyRect: NSRect) {
         // 1. Phủ tối toàn bộ màn hình. Không có ảnh đóng băng (overlay trong suốt,
         //    nền là màn hình sống) thì phủ nhạt hơn cho đỡ chói.
         NSColor(srgbRed: 0.02, green: 0.02, blue: 0.04,
-                alpha: frozen == nil ? 0.34 : Style.dimAlpha).setFill()
+                alpha: frozen == nil ? 0.34 : OverlayChrome.dimAlpha).setFill()
         bounds.fill()
 
         if !currentRect.isEmpty {
@@ -198,42 +190,6 @@ final class SelectionView: NSView {
         return "\(w) × \(h)"
     }
 
-    /// Chip nền tối bo góc — dùng chung cho nhãn kích thước, toạ độ, mã màu.
-    @discardableResult
-    private func drawChip(_ text: String, at origin: CGPoint, fontSize: CGFloat = 12,
-                          accent: Bool = false, swatch: NSColor? = nil) -> CGRect {
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .semibold),
-            .foregroundColor: NSColor.white,
-        ]
-        let size = text.size(withAttributes: attrs)
-        let padX: CGFloat = 8, padY: CGFloat = 5
-        let dot: CGFloat = swatch == nil ? 0 : fontSize - 1
-        let gap: CGFloat = swatch == nil ? 0 : 6
-        let box = CGRect(x: origin.x, y: origin.y,
-                         width: size.width + padX * 2 + dot + gap,
-                         height: size.height + padY * 2)
-
-        let shape = NSBezierPath(roundedRect: box, xRadius: Style.radius, yRadius: Style.radius)
-        (accent ? NSColor.controlAccentColor.withAlphaComponent(0.95) : Style.chipFill).setFill()
-        shape.fill()
-        Style.chipEdge.setStroke()
-        shape.lineWidth = 1
-        shape.stroke()
-
-        var textX = box.minX + padX
-        if let swatch {
-            let sq = CGRect(x: textX, y: box.midY - dot / 2, width: dot, height: dot)
-            swatch.setFill()
-            NSBezierPath(roundedRect: sq, xRadius: 2, yRadius: 2).fill()
-            NSColor(white: 1, alpha: 0.5).setStroke()
-            NSBezierPath(roundedRect: sq, xRadius: 2, yRadius: 2).stroke()
-            textX += dot + gap
-        }
-        text.draw(at: CGPoint(x: textX, y: box.minY + padY), withAttributes: attrs)
-        return box
-    }
-
     /// Nhãn của khung: mặc định nằm ngay trên góc trái, hết chỗ thì tụt xuống
     /// dưới, chật nữa thì chui vào trong khung.
     private func drawBadge(_ text: String, for rect: CGRect, accent: Bool) {
@@ -246,7 +202,7 @@ final class SelectionView: NSView {
             if origin.y + h > bounds.maxY - 6 { origin.y = rect.minY + 8 }
         }
         origin.x = max(6, min(origin.x, bounds.maxX - w - 6))
-        drawChip(text, at: origin, accent: accent)
+        OverlayChrome.drawChip(text, at: origin, accent: accent)
     }
 
     /// Đường gióng ở cạnh vừa bị hút. Chỉ kéo dài ra 2 phía NGOÀI khung (không
@@ -255,7 +211,7 @@ final class SelectionView: NSView {
         guard !guideXs.isEmpty || !guideYs.isEmpty else { return }
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         let ext: CGFloat = 130
-        let color = Style.guide
+        let color = OverlayChrome.guide
 
         func fade(_ from: CGPoint, _ to: CGPoint) {
             guard let grad = NSGradient(colors: [color.withAlphaComponent(0.85),
@@ -323,9 +279,9 @@ final class SelectionView: NSView {
                          width: boxW, height: boxH)
 
         let shape = NSBezierPath(roundedRect: box, xRadius: 14, yRadius: 14)
-        Style.chipFill.setFill()
+        OverlayChrome.chipFill.setFill()
         shape.fill()
-        Style.chipEdge.setStroke()
+        OverlayChrome.chipEdge.setStroke()
         shape.lineWidth = 1
         shape.stroke()
 
@@ -337,111 +293,18 @@ final class SelectionView: NSView {
 
     // Kính lúp: phóng to vùng quanh con trỏ từ ảnh đóng băng → chọn tới từng pixel.
     private func drawLoupe() {
-        guard let cg = frozen, let ctx = NSGraphicsContext.current?.cgContext else { return }
-        let side: CGFloat = 128, zoom: CGFloat = 8
-        let srcSide = (side / zoom * scaleFactor).rounded()
-        let maxX = CGFloat(cg.width) - srcSide, maxY = CGFloat(cg.height) - srcSide
-        guard maxX > 0, maxY > 0 else { return }
-        let srcX = min(max(0, (cursor.x * scaleFactor - srcSide / 2).rounded()), maxX)
-        let srcY = min(max(0, (cursor.y * scaleFactor - srcSide / 2).rounded()), maxY)
-        guard let crop = cg.cropping(to: CGRect(x: srcX, y: srcY, width: srcSide, height: srcSide))
+        guard let cg = frozen,
+              let box = OverlayChrome.drawLoupe(image: cg, cursor: cursor, scale: scaleFactor,
+                                                in: bounds, side: 128, zoom: 8, reserveBelow: 44)
         else { return }
 
-        // Đặt lệch khỏi con trỏ, tự lật khi sát mép màn hình.
-        let off: CGFloat = 22
-        var box = CGRect(x: cursor.x + off, y: cursor.y + off, width: side, height: side)
-        if box.maxX > bounds.maxX - 12 { box.origin.x = cursor.x - off - side }
-        if box.maxY > bounds.maxY - 44 { box.origin.y = cursor.y - off - side }
-        let shape = NSBezierPath(roundedRect: box, xRadius: 14, yRadius: 14)
-
-        // Bóng đổ cho kính nổi hẳn khỏi nền.
-        ctx.saveGState()
-        ctx.setShadow(offset: .zero, blur: 16, color: NSColor(white: 0, alpha: 0.55).cgColor)
-        NSColor(white: 0.08, alpha: 1).setFill()
-        shape.fill()
-        ctx.restoreGState()
-
-        ctx.saveGState()
-        shape.addClip()
-        // Vẽ ảnh trong view đã lật trục → phải lật ngược lại đúng trong ô này.
-        ctx.translateBy(x: 0, y: box.minY + box.maxY)
-        ctx.scaleBy(x: 1, y: -1)
-        ctx.interpolationQuality = .none          // giữ pixel sắc, không làm mượt
-        ctx.draw(crop, in: box)
-        ctx.restoreGState()
-
-        ctx.saveGState()
-        shape.addClip()
-        // Lưới pixel: mỗi ô = 1 pixel thật của màn hình. srcSide pixel nguồn trải
-        // đều trên `side` point → mỗi pixel rộng `step` point.
-        let step = side / srcSide
-        if step >= 3 {
-            NSColor(white: 1, alpha: 0.10).setStroke()
-            let grid = NSBezierPath()
-            grid.lineWidth = 0.5
-            var k: CGFloat = 1
-            while k < srcSide {
-                let x = box.minX + k * step, y = box.minY + k * step
-                grid.move(to: CGPoint(x: x, y: box.minY)); grid.line(to: CGPoint(x: x, y: box.maxY))
-                grid.move(to: CGPoint(x: box.minX, y: y)); grid.line(to: CGPoint(x: box.maxX, y: y))
-                k += 1
-            }
-            grid.stroke()
-        }
-        // Ô vuông đánh dấu đúng pixel dưới con trỏ (viền đen + trắng cho nổi trên mọi nền).
-        let ix = (cursor.x * scaleFactor).rounded(.down) - srcX
-        let iy = (cursor.y * scaleFactor).rounded(.down) - srcY
-        let cell = CGRect(x: box.minX + ix * step, y: box.minY + iy * step,
-                          width: step, height: step)
-        NSColor(white: 0, alpha: 0.9).setStroke()
-        let outer = NSBezierPath(rect: cell.insetBy(dx: -1, dy: -1)); outer.lineWidth = 1; outer.stroke()
-        NSColor.white.setStroke()
-        let inner = NSBezierPath(rect: cell); inner.lineWidth = 1; inner.stroke()
-        ctx.restoreGState()
-
-        Style.chipEdge.setStroke()
-        shape.lineWidth = 1
-        shape.stroke()
-
         // Chip dưới kính: mã màu + toạ độ pixel.
-        let color = pixelColor(at: cursor)
+        let color = OverlayChrome.pixelColor(in: cg, at: cursor, scale: scaleFactor)
         let text = "\(Int(cursor.x * scaleFactor)), \(Int(cursor.y * scaleFactor))"
-        let label = color.map { "\(hex(of: $0))  \(text)" } ?? text
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
-        ]
-        let w = label.size(withAttributes: attrs).width + 16 + (color == nil ? 0 : 16)
-        drawChip(label, at: CGPoint(x: box.midX - w / 2, y: box.maxY + 6),
-                 fontSize: 11, swatch: color)
-    }
-
-    /// Màu của đúng 1 pixel trong ảnh đóng băng (cho mã HEX cạnh kính lúp).
-    private func pixelColor(at p: NSPoint) -> NSColor? {
-        guard let cg = frozen else { return nil }
-        let x = Int(p.x * scaleFactor), y = Int(p.y * scaleFactor)
-        guard x >= 0, y >= 0, x < cg.width, y < cg.height,
-              let crop = cg.cropping(to: CGRect(x: x, y: y, width: 1, height: 1))
-        else { return nil }
-        // Phải cấp phát riêng: truyền `&mảng` vào CGContext là con trỏ chỉ hợp lệ
-        // trong đúng lời gọi đó, dùng tiếp ở c.draw() là chạm bộ nhớ đã hết hạn.
-        let px = UnsafeMutablePointer<UInt8>.allocate(capacity: 4)
-        px.initialize(repeating: 0, count: 4)
-        defer { px.deallocate() }
-        guard let c = CGContext(data: px, width: 1, height: 1, bitsPerComponent: 8,
-                                bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
-                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-        else { return nil }
-        c.draw(crop, in: CGRect(x: 0, y: 0, width: 1, height: 1))
-        return NSColor(srgbRed: CGFloat(px[0]) / 255, green: CGFloat(px[1]) / 255,
-                       blue: CGFloat(px[2]) / 255, alpha: 1)
-    }
-
-    private func hex(of color: NSColor) -> String {
-        let c = color.usingColorSpace(.sRGB) ?? color
-        return String(format: "#%02X%02X%02X",
-                      Int((c.redComponent * 255).rounded()),
-                      Int((c.greenComponent * 255).rounded()),
-                      Int((c.blueComponent * 255).rounded()))
+        let label = color.map { "\(OverlayChrome.hex(of: $0))  \(text)" } ?? text
+        let w = OverlayChrome.chipWidth(label, fontSize: 11, swatch: color != nil)
+        OverlayChrome.drawChip(label, at: CGPoint(x: box.midX - w / 2, y: box.maxY + 6),
+                               fontSize: 11, swatch: color)
     }
 
     // ── Bắt dính ─────────────────────────────────────────────────────────
