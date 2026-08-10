@@ -1,4 +1,4 @@
-import AppKit
+import SwiftUI
 
 // ─────────────────────────────────────────────────────────────────────────
 // Hiện vòng tròn "nảy ra" tại mỗi cú click chuột khi đang quay (giống CleanShot)
@@ -13,23 +13,62 @@ final class ClickEffectController {
     private var monitor: Any?
     private var region: CGRect = .zero   // vùng quay (toạ độ AppKit toàn cục)
 
+    // NHẬT KÝ CLICK: mỗi cú bấm ghi lại "giây thứ mấy của clip" + "bấm chỗ nào
+    // trong khung hình". Video Editor lấy đúng danh sách này để làm Auto Zoom —
+    // quay xong bấm một nút là có sẵn các nhịp phóng to vào chỗ vừa thao tác.
+    private(set) var clicks: [RecordedClick] = []
+    private var startedAt: Date?
+    private var pausedAt: Date?
+    private var pausedTotal: TimeInterval = 0
+
     // Bắt đầu lắng nghe click, chỉ hiện hiệu ứng trong `region`.
     func start(in region: CGRect) {
         stop()
         self.region = region
+        clicks = []
+        startedAt = Date()
+        pausedAt = nil
+        pausedTotal = 0
         monitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown]
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 let p = NSEvent.mouseLocation               // gốc dưới-trái, toàn cục
-                if NSPointInRect(p, self.region) { self.ripple(at: p) }
+                if NSPointInRect(p, self.region) {
+                    self.ripple(at: p)
+                    self.log(click: p)
+                }
             }
         }
     }
 
+    // Quay đang tạm dừng thì đồng hồ của clip cũng đứng → trừ đúng khoảng đó ra,
+    // nếu không mốc zoom sẽ trôi dần khỏi chỗ thật sự bấm.
+    func setPaused(_ paused: Bool) {
+        guard startedAt != nil else { return }
+        if paused {
+            if pausedAt == nil { pausedAt = Date() }
+        } else if let since = pausedAt {
+            pausedTotal += Date().timeIntervalSince(since)
+            pausedAt = nil
+        }
+    }
+
+    // Dừng lắng nghe nhưng GIỮ nhật ký lại — editor mở sau khi stop() mới đọc.
     func stop() {
         if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
+        pausedAt = nil
+    }
+
+    private func log(click p: NSPoint) {
+        guard let startedAt, region.width > 0, region.height > 0 else { return }
+        let t = Date().timeIntervalSince(startedAt) - pausedTotal
+        guard t >= 0 else { return }
+        // Chuẩn hoá về 0…1 theo khung hình, GỐC TRÊN-TRÁI (giống toạ độ video).
+        let x = (p.x - region.minX) / region.width
+        let y = 1 - (p.y - region.minY) / region.height
+        clicks.append(RecordedClick(time: t, point: CGPoint(x: x, y: y)))
     }
 
     // Vẽ 1 vòng tròn xanh phình to + mờ dần tại điểm click (giống CleanShot).
@@ -44,36 +83,33 @@ final class ClickEffectController {
         win.hasShadow = false
         win.ignoresMouseEvents = true
         win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-
-        let view = NSView(frame: NSRect(origin: .zero, size: NSSize(width: size, height: size)))
-        view.wantsLayer = true
-
-        let ring = CAShapeLayer()
-        ring.frame = view.bounds
-        ring.path = CGPath(ellipseIn: view.bounds.insetBy(dx: 3, dy: 3), transform: nil)
-        ring.fillColor = NSColor.systemBlue.withAlphaComponent(0.22).cgColor
-        ring.strokeColor = NSColor.systemBlue.withAlphaComponent(0.95).cgColor
-        ring.lineWidth = 2.5
-        view.layer?.addSublayer(ring)
-        win.contentView = view
+        win.contentView = NSHostingView(rootView: RippleView())
         win.orderFrontRegardless()
-
-        // Phình từ 0.3→1.0 quanh tâm + mờ dần về 0 trong 0.45s.
-        let grow = CABasicAnimation(keyPath: "transform.scale")
-        grow.fromValue = 0.3; grow.toValue = 1.0
-        let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = 1.0; fade.toValue = 0.0
-        let group = CAAnimationGroup()
-        group.animations = [grow, fade]
-        group.duration = 0.45
-        group.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        group.fillMode = .forwards
-        group.isRemovedOnCompletion = false
-        ring.add(group, forKey: "ripple")
 
         // Huỷ cửa sổ sau khi animate xong (giữ ref qua closure để không bị thu sớm).
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             win.orderOut(nil)
         }
+    }
+}
+
+/// Vòng tròn phình từ 0.3→1.0 + mờ dần về 0 trong 0.45s, tự chạy khi hiện ra.
+private struct RippleView: View {
+    @State private var grown = false
+
+    var body: some View {
+        Circle()
+            .fill(Color(nsColor: .systemBlue).opacity(0.22))
+            .overlay {
+                Circle().stroke(Color(nsColor: .systemBlue).opacity(0.95), lineWidth: 2.5)
+            }
+            .padding(3)
+            .scaleEffect(grown ? 1 : 0.3)
+            .opacity(grown ? 0 : 1)
+            .task {
+                // Đổi state trong .task (sau khi đã vẽ khung đầu) — đặt ngay ở
+                // onAppear thì SwiftUI gộp vào lần vẽ đầu và mất animation.
+                withAnimation(.easeOut(duration: 0.45)) { grown = true }
+            }
     }
 }

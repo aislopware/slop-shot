@@ -21,6 +21,9 @@ targets:
         CFBundleShortVersionString: "0.1"
         LSMinimumSystemVersion: "15.0"
         LSUIElement: true        # app chạy nền: ẩn Dock + ẩn khỏi ⌘Tab
+        # Quyền mic phải khai ở ĐÂY, không phải sửa tay Support/Info.plist —
+        # `make gen` sinh lại plist từ file này nên sửa tay là mất.
+        NSMicrophoneUsageDescription: SlopShot records your microphone when you turn on voice-over for a screen recording.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.thanglb.slopshot

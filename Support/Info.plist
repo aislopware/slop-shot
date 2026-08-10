@@ -24,5 +24,7 @@
 	<string>15.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>SlopShot records your microphone when you turn on voice-over for a screen recording.</string>
 </dict>
 </plist>

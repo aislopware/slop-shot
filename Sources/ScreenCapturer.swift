@@ -18,7 +18,7 @@ final class ScreenCapturer: ObservableObject {
     private let editor = EditorWindowController()
     private let recorder = ScreenRecorder()
     private let videoViewer = VideoPlayerWindowController()       // 👁 Quick Look clip trong app
-    private let videoTrimmer = VideoTrimWindowController()        // ✂️ cắt + đổi định dạng clip
+    private let videoEditor = VideoEditorWindowController()       // ✂️ cắt/zoom/che/chữ + xuất file
     private let recordingBar = RecordingBarController()
     private let recordingOverlay = RecordingOverlayController()   // dim + viền focus
     private let clickEffect = ClickEffectController()             // vòng tròn click
@@ -37,11 +37,12 @@ final class ScreenCapturer: ObservableObject {
     var canEditLast: Bool { lastImage != nil }
 
     // Bắt đầu chụp/quay mới → tự đóng MỌI cửa sổ đang mở (editor ảnh, Quick Look,
-    // Trim) mà KHÔNG lưu — giống CleanShot. Tránh việc thao tác mới nhảy về cái cũ.
+    // Video Editor) mà KHÔNG lưu — giống CleanShot. Tránh việc thao tác mới nhảy
+    // về cái cũ.
     private func dismissOpenEditors() {
         editor.dismiss()
         videoViewer.dismiss()
-        videoTrimmer.dismiss()
+        videoEditor.dismiss()
         ocrWindow.dismiss()
     }
 
@@ -327,6 +328,7 @@ final class ScreenCapturer: ObservableObject {
             recordingBar.onStop      = { [weak self] in Task { await self?.stopRecording() } }
             recordingBar.onPauseToggle = { [weak self] paused in
                 if paused { self?.recorder.pause() } else { self?.recorder.resume() }
+                self?.clickEffect.setPaused(paused)   // nhật ký click dừng theo
             }
             recordingBar.onRestart   = { [weak self] in Task { await self?.restartRecording() } }
             recordingBar.onDiscard   = { [weak self] in Task { await self?.discardRecording() } }
@@ -376,6 +378,8 @@ final class ScreenCapturer: ObservableObject {
         recordingBar.hide()
         recordingOverlay.hide()
         clickEffect.stop()
+        // Chốt nhật ký click NGAY (lần quay sau sẽ xoá sạch nó).
+        let clickLog = clickEffect.clicks
 
         guard let tmpURL = await recorder.stop() else {
             lastStatus = "❌ Recording failed (no frames captured)."
@@ -415,14 +419,17 @@ final class ScreenCapturer: ObservableObject {
                 pb.writeObjects([url as NSURL])
             },
             onSave: { [weak self] in self?.quickSaveVideo(url) },
-            onTrim: { [weak self] in   // ✂️ mở tool trim với clip vừa quay
+            onTrim: { [weak self] in   // ✂️ mở Video Editor với clip vừa quay
                 guard let self else { return }
-                self.videoTrimmer.onDone = { [weak self] out in
+                self.videoEditor.onDone = { [weak self] out in
                     guard let self, let out else { return }
                     self.lastSavedURL = out
-                    self.lastStatus = "✅ Exported to \(self.settings.saveFolderDisplay)"
+                    self.lastStatus = "✅ Exported to \(out.deletingLastPathComponent().lastPathComponent)"
                 }
-                self.videoTrimmer.open(url: url, saveFolder: self.settings.saveFolderURL)
+                // Nhật ký click của lần quay này → nút Auto Zoom trong editor.
+                self.videoEditor.open(url: url,
+                                      saveFolder: self.settings.saveFolderURL,
+                                      clicks: clickLog)
             }
         )
     }
