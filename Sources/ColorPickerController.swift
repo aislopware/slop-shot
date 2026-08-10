@@ -1,4 +1,4 @@
-import AppKit
+import SwiftUI
 
 // ─────────────────────────────────────────────────────────────────────────
 // Lớp phủ "hút màu": rê chuột tới đâu đọc màu pixel tới đó, bấm 1 phát là chép
@@ -10,18 +10,119 @@ import AppKit
 //
 // Màu đọc từ ẢNH ĐÓNG BĂNG chứ không phải từ màn hình sống, nên kể cả app phía
 // dưới có vẽ lại thì màu vẫn đúng khoảnh khắc bấm phím tắt.
+//
+// Phần NHÌN THẤY là SwiftUI (ColorPickerOverlay); ColorPickerEventView chỉ còn
+// nhiệm vụ bắt chuột/phím thô và đẩy vào model.
 // ─────────────────────────────────────────────────────────────────────────
-final class ColorPickerView: NSView {
+@MainActor
+final class ColorPickerModel: ObservableObject {
+    @Published var cursor: CGPoint = .zero
+    @Published var color: NSColor?
+    @Published var format: AppSettings.ColorFormat = .hex
+
+    var frozen: CGImage?
+    var scaleFactor: CGFloat = 2
+}
+
+struct ColorPickerOverlay: View {
+    @ObservedObject var model: ColorPickerModel
+
+    var body: some View {
+        GeometryReader { geo in
+            let bounds = CGRect(origin: .zero, size: geo.size)
+            // Kính lúp to hơn và phóng mạnh hơn lúc chọn vùng: ở đây cần trúng
+            // ĐÚNG 1 pixel, không phải canh khung.
+            let side: CGFloat = 152
+            let box = OverlayChrome.loupeBox(cursor: model.cursor, in: bounds, side: side,
+                                             offset: 26, reserveBelow: 96)
+            ZStack(alignment: .topLeading) {
+                Color.clear
+
+                // Gợi ý nằm DƯỚI cùng trong thứ tự vẽ: nó ở cố định đáy màn, còn
+                // kính lúp bám con trỏ nên hai cái chồng nhau là chuyện thường —
+                // lúc đó phải thấy màu, không phải thấy hướng dẫn.
+                OverlayHint(title: "Click to copy the color",
+                            subtitle: "← → change format  ·  arrow keys with ⇧ nudge by 1px  ·  esc to cancel")
+                    .padding(.bottom, 96)
+                    .frame(width: geo.size.width, height: geo.size.height, alignment: .bottom)
+
+                if let cg = model.frozen {
+                    LoupeView(image: cg, cursor: model.cursor, scale: model.scaleFactor,
+                              side: side, zoom: 12)
+                        .position(x: box.midX, y: box.midY)
+                    readout(below: box, in: bounds)
+                }
+            }
+        }
+        .ignoresSafeArea()
+    }
+
+    /// Bảng dưới kính lúp: ô màu to + chuỗi màu theo định dạng đang chọn + toạ độ.
+    @ViewBuilder
+    private func readout(below box: CGRect, in bounds: CGRect) -> some View {
+        if let color = model.color {
+            let value = model.format.string(from: color)
+            let meta = "\(model.format.shortLabel)  ·  "
+                + "\(Int(model.cursor.x * model.scaleFactor)), \(Int(model.cursor.y * model.scaleFactor))"
+            let size = panelSize(value: value, meta: meta)
+
+            // Canh giữa dưới kính, kẹp trong màn hình.
+            let x = min(max(8, box.midX - size.width / 2), bounds.maxX - size.width - 8)
+            let yBelow = box.maxY + 8
+            let y = yBelow + size.height > bounds.maxY - 8 ? box.minY - size.height - 8 : yBelow
+
+            HStack(spacing: 10) {
+                // Ô màu: viền sáng bên trong để phân biệt được cả màu đen tuyền
+                // lẫn trắng tinh.
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color(nsColor: color))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(.white.opacity(0.35), lineWidth: 1))
+                    .frame(width: 30, height: 30)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(value)
+                        .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(.white)
+                    Text(meta)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.55))
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+            .background(OverlayChrome.chipFill, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(OverlayChrome.chipEdge, lineWidth: 1))
+            .position(x: x + size.width / 2, y: y + size.height / 2)
+        }
+    }
+
+    /// Đo trước bảng để canh vị trí (SwiftUI đặt view theo tâm).
+    private func panelSize(value: String, meta: String) -> CGSize {
+        let vs = value.size(withAttributes: [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold)])
+        let ms = meta.size(withAttributes: [
+            .font: NSFont.systemFont(ofSize: 10, weight: .medium)])
+        return CGSize(width: 10 * 2 + 30 + 10 + max(vs.width, ms.width),
+                      height: 9 * 2 + vs.height + 2 + ms.height)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// View bắt sự kiện (trong suốt, nằm đè lên phần vẽ).
+// ─────────────────────────────────────────────────────────────────────────
+final class ColorPickerEventView: NSView {
     var onPick: ((NSColor, CGPoint) -> Void)?
     var onCancel: (() -> Void)?
     var onFormatChange: ((AppSettings.ColorFormat) -> Void)?
 
-    var frozen: CGImage?
-    var scaleFactor: CGFloat = 2
-    var format: AppSettings.ColorFormat = .hex { didSet { needsDisplay = true } }
+    let model: ColorPickerModel
 
-    private var cursor: NSPoint = .zero
-    private var color: NSColor?
+    init(frame: NSRect, model: ColorPickerModel) {
+        self.model = model
+        super.init(frame: frame)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) chưa dùng tới") }
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -40,118 +141,18 @@ final class ColorPickerView: NSView {
 
     /// Đặt vị trí con trỏ lúc overlay vừa mở (chưa có mouseMoved nào bắn ra).
     func primeCursor(_ p: NSPoint) {
-        cursor = p
+        model.cursor = p
         refreshColor()
     }
 
     private func refreshColor() {
-        guard let cg = frozen else { return }
-        color = OverlayChrome.pixelColor(in: cg, at: cursor, scale: scaleFactor)
-        needsDisplay = true
-    }
-
-    // ── Vẽ ───────────────────────────────────────────────────────────────
-    override func draw(_ dirtyRect: NSRect) {
-        guard let cg = frozen else { return }
-
-        // Gợi ý vẽ TRƯỚC: nó nằm cố định dưới đáy, còn kính lúp bám con trỏ nên
-        // hai cái chồng nhau là chuyện thường — lúc đó phải thấy màu, không phải
-        // thấy hướng dẫn.
-        drawHint()
-
-        // Kính lúp to hơn và phóng mạnh hơn lúc chọn vùng: ở đây cần trúng ĐÚNG
-        // 1 pixel, không phải canh khung.
-        let box = OverlayChrome.drawLoupe(image: cg, cursor: cursor, scale: scaleFactor,
-                                          in: bounds, side: 152, zoom: 12,
-                                          offset: 26, reserveBelow: 96)
-        if let box { drawReadout(below: box) }
-    }
-
-    /// Bảng dưới kính lúp: ô màu to + chuỗi màu theo định dạng đang chọn + toạ độ.
-    private func drawReadout(below box: CGRect) {
-        guard let color else { return }
-        let value = format.string(from: color)
-
-        let valueAttrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold),
-            .foregroundColor: NSColor.white,
-        ]
-        let metaAttrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 10, weight: .medium),
-            .foregroundColor: NSColor(white: 1, alpha: 0.55),
-        ]
-        let meta = "\(format.shortLabel)  ·  \(Int(cursor.x * scaleFactor)), \(Int(cursor.y * scaleFactor))"
-        let vs = value.size(withAttributes: valueAttrs)
-        let ms = meta.size(withAttributes: metaAttrs)
-
-        let swatch: CGFloat = 30, padX: CGFloat = 10, padY: CGFloat = 9, gap: CGFloat = 10
-        let textW = max(vs.width, ms.width)
-        let w = padX * 2 + swatch + gap + textW
-        let h = padY * 2 + vs.height + 2 + ms.height
-
-        // Canh giữa dưới kính, kẹp trong màn hình.
-        var origin = CGPoint(x: box.midX - w / 2, y: box.maxY + 8)
-        origin.x = min(max(8, origin.x), bounds.maxX - w - 8)
-        if origin.y + h > bounds.maxY - 8 { origin.y = box.minY - h - 8 }
-        let panel = CGRect(x: origin.x, y: origin.y, width: w, height: h)
-
-        let shape = NSBezierPath(roundedRect: panel, xRadius: 12, yRadius: 12)
-        OverlayChrome.chipFill.setFill()
-        shape.fill()
-        OverlayChrome.chipEdge.setStroke()
-        shape.lineWidth = 1
-        shape.stroke()
-
-        // Ô màu: viền sáng bên trong để phân biệt được cả màu đen tuyền lẫn trắng tinh.
-        let sq = CGRect(x: panel.minX + padX, y: panel.midY - swatch / 2,
-                        width: swatch, height: swatch)
-        let sqPath = NSBezierPath(roundedRect: sq, xRadius: 6, yRadius: 6)
-        color.setFill()
-        sqPath.fill()
-        NSColor(white: 1, alpha: 0.35).setStroke()
-        sqPath.lineWidth = 1
-        sqPath.stroke()
-
-        let textX = sq.maxX + gap
-        value.draw(at: CGPoint(x: textX, y: panel.minY + padY), withAttributes: valueAttrs)
-        meta.draw(at: CGPoint(x: textX, y: panel.minY + padY + vs.height + 2), withAttributes: metaAttrs)
-    }
-
-    private func drawHint() {
-        let title: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 15, weight: .semibold),
-            .foregroundColor: NSColor.white,
-        ]
-        let sub: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 12, weight: .regular),
-            .foregroundColor: NSColor(white: 1, alpha: 0.62),
-        ]
-        let line1 = "Click to copy the color"
-        let line2 = "← → change format  ·  arrow keys with ⇧ nudge by 1px  ·  esc to cancel"
-
-        let s1 = line1.size(withAttributes: title)
-        let s2 = line2.size(withAttributes: sub)
-        let padX: CGFloat = 22, padY: CGFloat = 15, gap: CGFloat = 5
-        let boxW = max(s1.width, s2.width) + padX * 2
-        let boxH = s1.height + gap + s2.height + padY * 2
-        let box = CGRect(x: (bounds.width - boxW) / 2, y: bounds.maxY - boxH - 96,
-                         width: boxW, height: boxH)
-
-        let shape = NSBezierPath(roundedRect: box, xRadius: 14, yRadius: 14)
-        OverlayChrome.chipFill.setFill()
-        shape.fill()
-        OverlayChrome.chipEdge.setStroke()
-        shape.lineWidth = 1
-        shape.stroke()
-
-        line1.draw(at: CGPoint(x: box.midX - s1.width / 2, y: box.minY + padY), withAttributes: title)
-        line2.draw(at: CGPoint(x: box.midX - s2.width / 2, y: box.minY + padY + s1.height + gap),
-                   withAttributes: sub)
+        guard let cg = model.frozen else { return }
+        model.color = OverlayChrome.pixelColor(in: cg, at: model.cursor, scale: model.scaleFactor)
     }
 
     // ── Sự kiện ──────────────────────────────────────────────────────────
     override func mouseMoved(with event: NSEvent) {
-        cursor = convert(event.locationInWindow, from: nil)
+        model.cursor = convert(event.locationInWindow, from: nil)
         refreshColor()
     }
 
@@ -161,9 +162,8 @@ final class ColorPickerView: NSView {
     override func mouseDragged(with event: NSEvent) { mouseMoved(with: event) }
 
     override func mouseUp(with event: NSEvent) {
-        guard let color else { onCancel?(); return }
-        onPick?(color, CGPoint(x: (cursor.x * scaleFactor).rounded(.down),
-                               y: (cursor.y * scaleFactor).rounded(.down)))
+        guard let color = model.color else { onCancel?(); return }
+        onPick?(color, pixelPoint())
     }
 
     override func rightMouseDown(with event: NSEvent) { onCancel?() }
@@ -173,10 +173,7 @@ final class ColorPickerView: NSView {
         case 53:                       // esc
             onCancel?()
         case 36, 49:                   // ↩ / space = chốt màu, cho ai thích dùng bàn phím
-            if let color {
-                onPick?(color, CGPoint(x: (cursor.x * scaleFactor).rounded(.down),
-                                       y: (cursor.y * scaleFactor).rounded(.down)))
-            }
+            if let color = model.color { onPick?(color, pixelPoint()) }
         case 123, 124, 125, 126:       // ← → ↓ ↑
             handleArrow(event)
         default:
@@ -184,22 +181,27 @@ final class ColorPickerView: NSView {
         }
     }
 
+    private func pixelPoint() -> CGPoint {
+        CGPoint(x: (model.cursor.x * model.scaleFactor).rounded(.down),
+                y: (model.cursor.y * model.scaleFactor).rounded(.down))
+    }
+
     /// ← → đổi định dạng; giữ ⇧ thì 4 phím mũi tên nhích con trỏ đúng 1 pixel
     /// (rê tay khó trúng pixel mong muốn ở chỗ chuyển màu gắt).
     private func handleArrow(_ event: NSEvent) {
         let all = AppSettings.ColorFormat.allCases
         if !event.modifierFlags.contains(.shift), event.keyCode == 123 || event.keyCode == 124 {
-            guard let i = all.firstIndex(of: format) else { return }
+            guard let i = all.firstIndex(of: model.format) else { return }
             let next = event.keyCode == 124 ? (i + 1) % all.count : (i - 1 + all.count) % all.count
-            format = all[next]
-            onFormatChange?(format)
+            model.format = all[next]
+            onFormatChange?(model.format)
             return
         }
 
         // Nhích 1 pixel ảnh = 1/scale point, và phải dời cả con trỏ thật của hệ
         // thống, nếu không lần mouseMoved kế tiếp sẽ kéo tuột về chỗ cũ.
-        let stepPt = 1 / scaleFactor
-        var p = cursor
+        let stepPt = 1 / model.scaleFactor
+        var p = model.cursor
         switch event.keyCode {
         case 123: p.x -= stepPt
         case 124: p.x += stepPt
@@ -208,7 +210,7 @@ final class ColorPickerView: NSView {
         }
         p.x = min(max(0, p.x), bounds.maxX - stepPt)
         p.y = min(max(0, p.y), bounds.maxY - stepPt)
-        cursor = p
+        model.cursor = p
         refreshColor()
 
         if let screen = window?.screen {
@@ -231,11 +233,13 @@ final class ColorPickerController {
     func begin(on screen: NSScreen, frozen: CGImage,
                completion: @escaping (NSColor?) -> Void) {
         let size = screen.frame.size
-        let view = ColorPickerView(frame: NSRect(origin: .zero, size: size))
+        let model = ColorPickerModel()
+        model.frozen = frozen
+        model.scaleFactor = CGFloat(frozen.width) / max(size.width, 1)
+        model.format = AppSettings.shared.colorFormat
+
+        let view = ColorPickerEventView(frame: NSRect(origin: .zero, size: size), model: model)
         view.autoresizingMask = [.width, .height]
-        view.frozen = frozen
-        view.scaleFactor = CGFloat(frozen.width) / max(size.width, 1)
-        view.format = AppSettings.shared.colorFormat
         let m = NSEvent.mouseLocation
         view.primeCursor(NSPoint(x: m.x - screen.frame.minX, y: screen.frame.maxY - m.y))
 
@@ -254,7 +258,12 @@ final class ColorPickerController {
         backdrop.layer?.contentsGravity = .resize
         backdrop.layer?.contentsScale = screen.backingScaleFactor
         backdrop.layer?.contents = frozen
-        backdrop.addSubview(view)
+
+        let chrome = PassthroughHostingView(rootView: ColorPickerOverlay(model: model))
+        chrome.frame = NSRect(origin: .zero, size: size)
+        chrome.autoresizingMask = [.width, .height]
+        backdrop.addSubview(chrome)
+        backdrop.addSubview(view)          // lớp bắt sự kiện nằm trên cùng
 
         let win = OverlayPanel(contentRect: screen.frame,
                                styleMask: [.borderless, .nonactivatingPanel],

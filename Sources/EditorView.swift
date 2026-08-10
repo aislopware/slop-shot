@@ -1070,8 +1070,15 @@ final class SaveFormatAccessory: NSObject {
         ("GIF", .gif, .gif),
     ]
     private let baseName: String
-    private let popup = NSPopUpButton()
     private weak var panel: NSSavePanel?
+    /// Chỉ số định dạng đang chọn. Là ObservableObject nên Picker bên dưới
+    /// đọc/ghi thẳng vào đây, khỏi cần target-action.
+    private let choice = Choice()
+
+    @MainActor
+    final class Choice: ObservableObject {
+        @Published var index = 0
+    }
 
     init(baseName: String) {
         self.baseName = baseName
@@ -1079,34 +1086,46 @@ final class SaveFormatAccessory: NSObject {
     }
 
     var selectedFileType: NSBitmapImageRep.FileType {
-        formats[max(popup.indexOfSelectedItem, 0)].type
+        formats[min(max(choice.index, 0), formats.count - 1)].type
     }
 
+    // NSSavePanel.accessoryView đòi một NSView → bọc SwiftUI qua NSHostingView.
     func makeAccessory(for panel: NSSavePanel) -> NSView {
         self.panel = panel
-        popup.removeAllItems()
-        popup.addItems(withTitles: formats.map { $0.title })
-        popup.target = self
-        popup.action = #selector(formatChanged)
-
-        let label = NSTextField(labelWithString: "Format:")
-        let stack = NSStackView(views: [label, popup])
-        stack.orientation = .horizontal
-        stack.alignment = .centerY
-        stack.spacing = 8
-        stack.edgeInsets = NSEdgeInsets(top: 8, left: 16, bottom: 8, right: 16)
+        let titles = formats.map { $0.title }
+        let host = NSHostingView(rootView: SaveFormatPicker(
+            titles: titles, choice: choice,
+            onChange: { [weak self] in self?.applyExtension() }))
+        host.frame = NSRect(origin: .zero, size: host.fittingSize)
         applyExtension()
-        return stack
+        return host
     }
-
-    @objc private func formatChanged() { applyExtension() }
 
     // Đổi đuôi file trong ô tên theo định dạng đang chọn.
     private func applyExtension() {
         guard let panel = panel else { return }
-        let f = formats[max(popup.indexOfSelectedItem, 0)]
+        let f = formats[min(max(choice.index, 0), formats.count - 1)]
         panel.allowedContentTypes = [f.ut]
         let ext = f.ut.preferredFilenameExtension ?? f.title.lowercased()
         panel.nameFieldStringValue = "\(baseName).\(ext)"
+    }
+}
+
+private struct SaveFormatPicker: View {
+    let titles: [String]
+    @ObservedObject var choice: SaveFormatAccessory.Choice
+    let onChange: () -> Void
+
+    var body: some View {
+        Picker("Format:", selection: $choice.index) {
+            ForEach(Array(titles.enumerated()), id: \.offset) { i, t in
+                Text(t).tag(i)
+            }
+        }
+        .pickerStyle(.menu)
+        .fixedSize()
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .onChange(of: choice.index) { _, _ in onChange() }
     }
 }

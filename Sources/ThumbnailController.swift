@@ -1,290 +1,29 @@
-import AppKit
+import SwiftUI
 
 // ─────────────────────────────────────────────────────────────────────────
 // Preview card nổi kiểu CleanShot X:
 //  - bình thường: chỉ hiện ảnh thu nhỏ (đúng tỷ lệ, bo góc, đổ bóng)
 //  - khi rê chuột: làm tối ảnh + hiện 2 nút Copy/Save ở giữa + 4 nút tròn 4 góc
 //  - click ảnh = mở editor; kéo ra ngoài = lôi file sang app khác
-// NSDraggingSource = "nguồn kéo".
+//
+// Kéo-ra-ngoài dùng `.onDrag` (SwiftUI tự lo phần NSDraggingSource), chia sẻ
+// dùng `ShareLink` — cả hai đều là đồ có sẵn, khỏi tự dựng lại.
 // ─────────────────────────────────────────────────────────────────────────
-final class ThumbnailView: NSView, NSDraggingSource {
-    var image: NSImage?
-    var fileURL: URL?
-    // Chế độ video: thẻ clip vừa quay (như CleanShot). Bố cục đổi thành:
-    //   - góc trên-phải: bỏ Pin → 👁 Quick Look (xem clip trong app)
-    //   - góc dưới-trái: ✂️ Trim (mở tool cắt) — thay cho nút bút của ảnh
-    //   - 2 capsule Copy/Save giữ nguyên (Copy = copy đường dẫn video)
-    // + badge ▶ giữa thẻ; Share/Drag dùng file .mov.
-    var isVideo = false {
-        didSet {
-            guard isVideo else { return }
-            let cfg = NSImage.SymbolConfiguration(pointSize: 10, weight: .bold)
-            // Góc trên-phải: Pin → 👁 Quick Look (mở màn xem của app).
-            pinButton?.image = NSImage(systemSymbolName: "eye", accessibilityDescription: "Quick Look")?
-                .withSymbolConfiguration(cfg)
-            pinButton?.toolTip = "Quick Look"
-            pinButton?.action = #selector(tapQuickLook)
-            // Góc dưới-trái: nút bút → ✂️ Trim (mở tool cắt clip vừa quay).
-            editButton?.image = NSImage(systemSymbolName: "scissors", accessibilityDescription: "Trim")?
-                .withSymbolConfiguration(cfg)
-            editButton?.toolTip = "Trim"
-            editButton?.action = #selector(tapTrim)
-            needsDisplay = true
-        }
-    }
-    var onClick: (() -> Void)?         // ✏️ edit ảnh / 👁 Quick Look video (click ảnh hoặc nút góc)
-    var onCopy: (() -> Void)?          // Copy lên clipboard
-    var onTrim: (() -> Void)?          // ✂️ mở tool trim (chỉ video)
-    var onSave: (() -> Void)?          // Save ra đích chọn
-    var onClose: (() -> Void)?         // ✕ bỏ preview
-    var onPin: (() -> Void)?           // 📌 ghim (không tự ẩn)
+
+/// `.onHover` của SwiftUI chỉ bắn khi app đang ACTIVE. Thẻ preview thì nổi trên
+/// app khác trong lúc SlopShot chạy nền → rê chuột vào sẽ chẳng hiện nút nào.
+/// Nên phần "chuột vào/ra" phải tự gắn tracking area `.activeAlways`.
+@MainActor
+final class HoverModel: ObservableObject {
+    @Published var hovering = false
+}
+
+private final class HoverHostingView<Content: View>: NSHostingView<Content> {
     var onHover: ((Bool) -> Void)?
 
-    private var mouseDownPoint: NSPoint = .zero
-    private var isDraggingOut = false
-    private var hoverControls: [NSView] = []   // tất cả nút + lớp tối, ẩn khi không hover
-    private let dimView = NSView()
-    private weak var pinButton: NSButton?
-    private weak var copyButton: NSButton?
-    private weak var saveButton: NSButton?
-    private weak var editButton: NSButton?
-    private var pinned = false
-    private enum Corner { case topLeft, topRight, bottomLeft, bottomRight }
-
-    // Lề chừa cho bóng đổ — dùng chung cho cả vẽ ảnh lẫn đặt nút.
-    static let pad: CGFloat = 14
-    private var pad: CGFloat { Self.pad }
-    private let radius: CGFloat = 13
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        setupControls()
-    }
+    required init(rootView: Content) { super.init(rootView: rootView) }
     required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
 
-    // ── Dựng lớp tối + 4 nút góc + 2 nút Copy/Save giữa (ẩn tới khi hover) ──
-    private func setupControls() {
-        let card = bounds.insetBy(dx: pad, dy: pad)   // vùng ảnh thật (trừ bóng đổ)
-
-        // Lớp làm tối ảnh khi hover (để nút nổi rõ).
-        dimView.wantsLayer = true
-        dimView.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.42).cgColor
-        dimView.layer?.cornerRadius = radius
-        dimView.frame = card
-        dimView.isHidden = true
-        addSubview(dimView)
-        hoverControls.append(dimView)
-
-        // 4 nút tròn ở góc. (SF Symbol, tooltip, hàm xử lý, góc)
-        let corners: [(String, String, Selector, Corner)] = [
-            ("xmark",                  "Discard", #selector(tapClose),      .topLeft),
-            ("pin",                    "Pin",     #selector(tapPin),        .topRight),
-            ("pencil.tip.crop.circle", "Edit",    #selector(tapEdit),       .bottomLeft),
-            ("square.and.arrow.up",    "Share",   #selector(tapShare(_:)),  .bottomRight),
-        ]
-        let btn: CGFloat = 24, m: CGFloat = 6
-        for (symbol, tip, action, corner) in corners {
-            let b = makeCircleButton(symbol: symbol, tooltip: tip, action: action, size: btn)
-            let x = (corner == .topLeft || corner == .bottomLeft)
-                ? card.minX + m : card.maxX - m - btn
-            let y = (corner == .topLeft || corner == .topRight)   // gốc toạ độ ở dưới-trái
-                ? card.maxY - m - btn : card.minY + m
-            b.frame = NSRect(x: x, y: y, width: btn, height: btn)
-            b.isHidden = true
-            addSubview(b)
-            hoverControls.append(b)
-            if symbol == "pin" { pinButton = b }
-            if symbol == "pencil.tip.crop.circle" { editButton = b }
-        }
-
-        // 2 nút capsule ở giữa: Copy (trên) / Save (dưới).
-        let cw: CGFloat = 68, ch: CGFloat = 23, gap: CGFloat = 6
-        let cx = card.midX - cw / 2
-        let copyB = makeCapsule(title: "Copy", action: #selector(tapCopy), size: NSSize(width: cw, height: ch))
-        let saveB = makeCapsule(title: "Save", action: #selector(tapSave), size: NSSize(width: cw, height: ch))
-        copyB.frame = NSRect(x: cx, y: card.midY + gap / 2, width: cw, height: ch)
-        saveB.frame = NSRect(x: cx, y: card.midY - gap / 2 - ch, width: cw, height: ch)
-        for b in [copyB, saveB] { b.isHidden = true; addSubview(b); hoverControls.append(b) }
-        copyButton = copyB
-        saveButton = saveB
-    }
-
-    // Rung nhẹ (chỉ trackpad Force Touch). React không có khái niệm này 😄
-    private func haptic() {
-        NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
-    }
-
-    private func capsuleTitle(_ s: String, color: NSColor) -> NSAttributedString {
-        NSAttributedString(string: s, attributes: [
-            .foregroundColor: color,
-            .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
-        ])
-    }
-
-    // Copy/Save xong: nút đổi thành icon tick (đen) cho thấy rõ đã xong.
-    // (Không cần revert vì ngay sau đó preview trượt đi rồi biến mất.)
-    private func showTick(on b: NSButton?) {
-        guard let b else { return }
-        let cfg = NSImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
-        b.image = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: "Copied")?
-            .withSymbolConfiguration(cfg)
-        b.imagePosition = .imageOnly
-        b.contentTintColor = .black.withAlphaComponent(0.85)   // đen, không xanh
-        b.attributedTitle = NSAttributedString(string: "")
-    }
-
-    private func makeCircleButton(symbol: String, tooltip: String,
-                                  action: Selector, size: CGFloat) -> NSButton {
-        let cfg = NSImage.SymbolConfiguration(pointSize: 10, weight: .bold)
-        let img = NSImage(systemSymbolName: symbol, accessibilityDescription: tooltip)?
-            .withSymbolConfiguration(cfg)
-        let b = NSButton(image: img ?? NSImage(), target: self, action: action)
-        b.isBordered = false
-        b.bezelStyle = .regularSquare
-        b.contentTintColor = .white
-        b.toolTip = tooltip
-        b.imageScaling = .scaleProportionallyDown
-        b.wantsLayer = true
-        b.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
-        b.layer?.cornerRadius = size / 2
-        (b.cell as? NSButtonCell)?.highlightsBy = []   // không đổi màu khi nhấn
-        return b
-    }
-
-    private func makeCapsule(title: String, action: Selector, size: NSSize) -> NSButton {
-        let b = NSButton(title: title, target: self, action: action)
-        b.isBordered = false
-        b.bezelStyle = .regularSquare
-        b.wantsLayer = true
-        b.attributedTitle = capsuleTitle(title, color: .black.withAlphaComponent(0.85))
-        b.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.92).cgColor
-        b.layer?.cornerRadius = size.height / 2
-        (b.cell as? NSButtonCell)?.highlightsBy = []   // không đổi màu khi nhấn
-        return b
-    }
-
-    @objc private func tapEdit()  { haptic(); onClick?(); onClose?() }   // mở editor + trượt đi
-    @objc private func tapCopy()  {
-        haptic(); onCopy?(); showTick(on: copyButton)
-        // cho thấy icon tick 1 nhịp rồi trượt biến mất
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
-            self?.onClose?()
-        }
-    }
-    @objc private func tapSave()  {
-        haptic(); onSave?(); showTick(on: saveButton)
-        // giống Copy: hiện tick 1 nhịp rồi trượt biến mất
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
-            self?.onClose?()
-        }
-    }
-    @objc private func tapQuickLook() { haptic(); onClick?() }          // 👁 mở màn xem (giữ preview)
-    @objc private func tapTrim()  { haptic(); onTrim?(); onClose?() }   // ✂️ mở trim + trượt đi
-    @objc private func tapClose() { haptic(); onClose?() }
-
-    @objc private func tapPin() {
-        haptic()
-        pinned.toggle()
-        let cfg = NSImage.SymbolConfiguration(pointSize: 10, weight: .bold)
-        pinButton?.image = NSImage(systemSymbolName: pinned ? "pin.fill" : "pin",
-                                   accessibilityDescription: "Pin")?
-            .withSymbolConfiguration(cfg)
-        onPin?()
-    }
-
-    @objc private func tapShare(_ sender: NSButton) {
-        haptic()
-        // Video share file; ảnh share NSImage.
-        let items: [Any] = isVideo ? [fileURL].compactMap { $0 } : [image].compactMap { $0 }
-        guard !items.isEmpty else { return }
-        let picker = NSSharingServicePicker(items: items)
-        picker.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
-    }
-
-    // ── Vẽ thẻ ảnh bo góc + viền + đổ bóng ───────────────────────────────
-    override func draw(_ dirtyRect: NSRect) {
-        guard let image = image else { return }
-        let rect = bounds.insetBy(dx: pad, dy: pad)
-        let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
-
-        // 1) Nền tối + bóng đổ mềm → card "nổi" khỏi màn hình.
-        NSGraphicsContext.saveGraphicsState()
-        let shadow = NSShadow()
-        shadow.shadowColor = NSColor.black.withAlphaComponent(0.5)
-        shadow.shadowBlurRadius = 20
-        shadow.shadowOffset = NSSize(width: 0, height: -6)
-        shadow.set()
-        NSColor(white: 0.1, alpha: 1).setFill()
-        path.fill()
-        NSGraphicsContext.restoreGraphicsState()
-
-        // 2) Ảnh: aspect-FILL trong ô vuông (phủ kín, cắt mép thừa → không méo).
-        NSGraphicsContext.saveGraphicsState()
-        path.addClip()
-        let iw = max(image.size.width, 1), ih = max(image.size.height, 1)
-        let fill = max(rect.width / iw, rect.height / ih)
-        let dw = iw * fill, dh = ih * fill
-        let imgRect = NSRect(x: rect.midX - dw / 2, y: rect.midY - dh / 2,
-                             width: dw, height: dh)
-        image.draw(in: imgRect, from: .zero, operation: .copy, fraction: 1.0)
-        NSGraphicsContext.restoreGraphicsState()
-
-        // 3) Viền sáng mảnh → tách nền.
-        NSColor.white.withAlphaComponent(0.22).setStroke()
-        let inner = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5),
-                                 xRadius: radius, yRadius: radius)
-        inner.lineWidth = 1
-        inner.stroke()
-
-        // 4) Video: vẽ nút ▶ tròn ở giữa cho biết đây là clip quay được.
-        if isVideo {
-            let r: CGFloat = 22
-            let circle = NSRect(x: rect.midX - r, y: rect.midY - r, width: r * 2, height: r * 2)
-            NSColor.black.withAlphaComponent(0.45).setFill()
-            NSBezierPath(ovalIn: circle).fill()
-            let s: CGFloat = 15
-            let tri = NSBezierPath()
-            tri.move(to: NSPoint(x: rect.midX - s * 0.3, y: rect.midY - s * 0.55))
-            tri.line(to: NSPoint(x: rect.midX - s * 0.3, y: rect.midY + s * 0.55))
-            tri.line(to: NSPoint(x: rect.midX + s * 0.6,  y: rect.midY))
-            tri.close()
-            NSColor.white.withAlphaComponent(0.95).setFill()
-            tri.fill()
-        }
-    }
-
-    // ── Phân biệt "click" với "kéo ra ngoài" ─────────────────────────────
-    override func mouseDown(with event: NSEvent) {
-        mouseDownPoint = event.locationInWindow
-        isDraggingOut = false
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        let dx = event.locationInWindow.x - mouseDownPoint.x
-        let dy = event.locationInWindow.y - mouseDownPoint.y
-        if !isDraggingOut, (abs(dx) > 4 || abs(dy) > 4) {
-            isDraggingOut = true
-            beginFileDrag(with: event)
-        }
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        if !isDraggingOut { onClick?() }   // bấm mà không kéo = mở editor
-    }
-
-    private func beginFileDrag(with event: NSEvent) {
-        guard let fileURL = fileURL, let image = image else { return }
-        let item = NSDraggingItem(pasteboardWriter: fileURL as NSURL)
-        item.setDraggingFrame(bounds.insetBy(dx: pad, dy: pad), contents: image)
-        beginDraggingSession(with: [item], event: event, source: self)
-    }
-
-    func draggingSession(_ session: NSDraggingSession,
-                         sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
-        .copy
-    }
-
-    // ── Theo dõi rê chuột: hiện/ẩn nút + tạm dừng tự-ẩn ──────────────────
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingAreas.forEach { removeTrackingArea($0) }
@@ -292,13 +31,155 @@ final class ThumbnailView: NSView, NSDraggingSource {
                                        options: [.mouseEnteredAndExited, .activeAlways],
                                        owner: self, userInfo: nil))
     }
-    override func mouseEntered(with event: NSEvent) {
-        onHover?(true)
-        hoverControls.forEach { $0.isHidden = false }
+    override func mouseEntered(with event: NSEvent) { onHover?(true) }
+    override func mouseExited(with event: NSEvent) { onHover?(false) }
+}
+
+/// Thẻ preview. Chế độ video đổi 2 nút góc: Pin → 👁 Quick Look, ✏️ → ✂️ Trim.
+private struct ThumbnailCard: View {
+    @ObservedObject var hover: HoverModel
+    let image: NSImage
+    let fileURL: URL
+    let isVideo: Bool
+
+    var onClick: () -> Void        // ✏️ edit ảnh / 👁 Quick Look video
+    var onCopy: () -> Void
+    var onSave: () -> Void
+    var onTrim: (() -> Void)?
+    var onClose: () -> Void
+    var onPin: () -> Void
+
+    static let pad: CGFloat = 14   // lề chừa cho bóng đổ
+    static let card = CGSize(width: 210, height: 150)
+    private let radius: CGFloat = 13
+
+    private var hovering: Bool { hover.hovering }
+    @State private var pinned = false
+    /// Nút vừa bấm xong → đổi thành icon tick một nhịp trước khi thẻ trượt đi.
+    @State private var ticked: String?
+
+    var body: some View {
+        ZStack {
+            // Ảnh: aspect-FILL trong thẻ (phủ kín, cắt mép thừa → không méo).
+            Color(white: 0.1)
+            Image(nsImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        }
+        .frame(width: Self.card.width, height: Self.card.height)
+        .clipShape(RoundedRectangle(cornerRadius: radius))
+        .overlay {
+            RoundedRectangle(cornerRadius: radius).stroke(.white.opacity(0.22), lineWidth: 1)
+        }
+        .overlay { if isVideo && !hovering { playBadge } }
+        .overlay { if hovering { controls } }
+        .shadow(color: .black.opacity(0.5), radius: 10, y: 6)
+        .padding(Self.pad)
+        .contentShape(RoundedRectangle(cornerRadius: radius))
+        .onTapGesture { onClick() }
+        .onDrag {                       // kéo ra ngoài = lôi file sang app khác
+            NSItemProvider(contentsOf: fileURL) ?? NSItemProvider()
+        } preview: {
+            Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+                .frame(width: Self.card.width, height: Self.card.height)
+                .clipShape(RoundedRectangle(cornerRadius: radius))
+        }
     }
-    override func mouseExited(with event: NSEvent) {
-        onHover?(false)
-        hoverControls.forEach { $0.isHidden = true }
+
+    /// Nút ▶ tròn ở giữa cho biết đây là clip quay được.
+    private var playBadge: some View {
+        Image(systemName: "play.fill")
+            .font(.system(size: 15, weight: .bold))
+            .foregroundStyle(.white.opacity(0.95))
+            .frame(width: 44, height: 44)
+            .background(.black.opacity(0.45), in: Circle())
+    }
+
+    /// Lớp tối + 4 nút góc + 2 capsule giữa — chỉ hiện khi rê chuột vào.
+    private var controls: some View {
+        ZStack {
+            Color.black.opacity(0.42)
+
+            VStack(spacing: 6) {
+                capsule("Copy", tick: ticked == "copy") { fire("copy", onCopy) }
+                capsule("Save", tick: ticked == "save") { fire("save", onSave) }
+            }
+
+            VStack {
+                HStack {
+                    circle("xmark", "Discard") { haptic(); onClose() }
+                    Spacer()
+                    if isVideo {
+                        circle("eye", "Quick Look") { haptic(); onClick() }
+                    } else {
+                        circle(pinned ? "pin.fill" : "pin", "Pin") {
+                            haptic(); pinned.toggle(); onPin()
+                        }
+                    }
+                }
+                Spacer()
+                HStack {
+                    if isVideo {
+                        circle("scissors", "Trim") { haptic(); onTrim?(); onClose() }
+                    } else {
+                        circle("pencil.tip.crop.circle", "Edit") { haptic(); onClick(); onClose() }
+                    }
+                    Spacer()
+                    ShareLink(item: fileURL) {
+                        circleLabel("square.and.arrow.up")
+                    }
+                    .buttonStyle(.plain)
+                    .help("Share")
+                }
+            }
+            .padding(6)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: radius))
+    }
+
+    // Copy/Save: hiện tick một nhịp rồi để thẻ trượt đi.
+    private func fire(_ key: String, _ action: @escaping () -> Void) {
+        haptic()
+        action()
+        ticked = key
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { onClose() }
+    }
+
+    private func capsule(_ title: String, tick: Bool, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Group {
+                if tick {
+                    Image(systemName: "checkmark.circle.fill").font(.system(size: 15, weight: .semibold))
+                } else {
+                    Text(title).font(.system(size: 12, weight: .semibold))
+                }
+            }
+            .foregroundStyle(.black.opacity(0.85))
+            .frame(width: 68, height: 23)
+            .background(.white.opacity(0.92), in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func circle(_ symbol: String, _ tip: String,
+                        _ action: @escaping () -> Void) -> some View {
+        Button(action: action) { circleLabel(symbol) }
+            .buttonStyle(.plain)
+            .help(tip)
+    }
+
+    private func circleLabel(_ symbol: String) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: 24, height: 24)
+            .background(.black.opacity(0.55), in: Circle())
+            .contentShape(Circle())
+    }
+
+    // Rung nhẹ (chỉ trackpad Force Touch). React không có khái niệm này 😄
+    private func haptic() {
+        NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
     }
 }
 
@@ -321,16 +202,36 @@ final class ThumbnailController {
         hide()   // dọn cái cũ trước
         pinned = false
 
-        // Card CHỮ NHẬT cố định 200×160. Ảnh aspect-fill bên trong (xem draw()).
-        let pad = ThumbnailView.pad
-        let card = CGSize(width: 210, height: 150)
-        let size = NSSize(width: card.width + pad * 2, height: card.height + pad * 2)
+        // Card CHỮ NHẬT cố định 210×150. Ảnh aspect-fill bên trong.
+        let pad = ThumbnailCard.pad
+        let size = NSSize(width: ThumbnailCard.card.width + pad * 2,
+                          height: ThumbnailCard.card.height + pad * 2)
 
         guard let screen = NSScreen.main else { return }
         let margin: CGFloat = 24
         let origin = NSPoint(x: screen.visibleFrame.minX + margin,
                              y: screen.visibleFrame.minY + margin)   // góc dưới-trái
         let frame = NSRect(origin: origin, size: size)
+
+        let hover = HoverModel()
+        let card = ThumbnailCard(
+            hover: hover,
+            image: image, fileURL: fileURL, isVideo: isVideo,
+            onClick: onEdit, onCopy: onCopy, onSave: onSave, onTrim: onTrim,
+            onClose: { [weak self] in self?.dismiss(slide: true) },
+            onPin: { [weak self] in
+                guard let self else { return }
+                self.pinned.toggle()
+                if self.pinned { self.dismissTask?.cancel() }
+            })
+
+        let host = HoverHostingView(rootView: card)
+        host.onHover = { [weak self] inside in
+            guard let self else { return }
+            hover.hovering = inside
+            if inside { self.dismissTask?.cancel() }        // rê vào: giữ lại
+            else if !self.pinned { self.scheduleDismiss(after: 1.5) }  // rê ra: ẩn (trừ khi ghim)
+        }
 
         let p = NSPanel(contentRect: frame,
                         styleMask: [.borderless, .nonactivatingPanel],
@@ -340,27 +241,7 @@ final class ThumbnailController {
         p.isOpaque = false
         p.hasShadow = false
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-
-        let view = ThumbnailView(frame: NSRect(origin: .zero, size: size))
-        view.image = image
-        view.fileURL = fileURL
-        view.isVideo = isVideo
-        view.onClick = onEdit
-        view.onCopy = onCopy
-        view.onSave = onSave
-        view.onTrim = onTrim
-        view.onClose = { [weak self] in self?.dismiss(slide: true) }
-        view.onPin = { [weak self] in
-            guard let self else { return }
-            self.pinned.toggle()
-            if self.pinned { self.dismissTask?.cancel() }
-        }
-        view.onHover = { [weak self] inside in
-            guard let self else { return }
-            if inside { self.dismissTask?.cancel() }        // rê vào: giữ lại
-            else if !self.pinned { self.scheduleDismiss(after: 1.5) }  // rê ra: ẩn (trừ khi ghim)
-        }
-        p.contentView = view
+        p.contentView = host
 
         // Trượt VÀO từ mép trái (đối xứng với lúc đóng trượt ra) + fade.
         var startFrame = frame

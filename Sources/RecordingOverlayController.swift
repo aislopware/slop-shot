@@ -1,4 +1,4 @@
-import AppKit
+import SwiftUI
 
 // ─────────────────────────────────────────────────────────────────────────
 // Lớp phủ FOCUS khi đang quay: tối xung quanh + khoét trong suốt đúng vùng
@@ -15,8 +15,8 @@ final class RecordingOverlayController {
     func show(rect: CGRect, on screen: NSScreen) {
         hide()
 
-        let view = RecordingOverlayView(frame: NSRect(origin: .zero, size: screen.frame.size))
-        view.regionRect = rect
+        let host = NSHostingView(rootView: RecordingFocusView(region: rect))
+        host.frame = NSRect(origin: .zero, size: screen.frame.size)
 
         let win = NSWindow(contentRect: screen.frame, styleMask: .borderless,
                            backing: .buffered, defer: false)
@@ -26,7 +26,7 @@ final class RecordingOverlayController {
         win.hasShadow = false
         win.ignoresMouseEvents = true   // click xuyên qua: vẫn dùng được app đang quay
         win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        win.contentView = view
+        win.contentView = host
         win.orderFrontRegardless()
         window = win
     }
@@ -37,26 +37,27 @@ final class RecordingOverlayController {
     }
 }
 
-private final class RecordingOverlayView: NSView {
-    var regionRect: CGRect = .zero
-    // Gốc toạ độ trên-trái cho khớp rect từ overlay chọn vùng.
-    override var isFlipped: Bool { true }
+/// `region` dùng gốc TRÊN-TRÁI (như rect trả về từ overlay chọn vùng) — trùng
+/// luôn với hệ toạ độ của SwiftUI nên khỏi lật gì cả.
+private struct RecordingFocusView: View {
+    let region: CGRect
 
-    override func draw(_ dirtyRect: NSRect) {
-        // 1) Tối toàn màn hình.
-        NSColor(white: 0, alpha: 0.35).setFill()
-        bounds.fill()
+    var body: some View {
+        GeometryReader { geo in
+            ZStack {
+                // Tối cả màn, khoét thủng đúng vùng đang quay (even-odd).
+                Path { p in
+                    p.addRect(CGRect(origin: .zero, size: geo.size))
+                    p.addRect(region)
+                }
+                .fill(.black.opacity(0.35), style: FillStyle(eoFill: true))
 
-        guard !regionRect.isEmpty else { return }
-
-        // 2) Khoét vùng đang quay cho trong suốt (thấy nội dung thật).
-        NSColor.clear.setFill()
-        regionRect.fill(using: .copy)
-
-        // 3) Viền quanh vùng — vẽ NGOÀI mép 1.5px để không lọt vào khung quay.
-        let border = NSBezierPath(rect: regionRect.insetBy(dx: -1.5, dy: -1.5))
-        border.lineWidth = 2
-        NSColor.systemRed.withAlphaComponent(0.9).setStroke()   // đỏ = đang quay
-        border.stroke()
+                // Viền đỏ = đang quay. Nới ra 1.5px để nét viền nằm NGOÀI khung
+                // quay, không lọt vào video.
+                Path(region.insetBy(dx: -1.5, dy: -1.5))
+                    .stroke(Color(nsColor: .systemRed).opacity(0.9), lineWidth: 2)
+            }
+            .ignoresSafeArea()
+        }
     }
 }

@@ -1,4 +1,4 @@
-import AppKit
+import SwiftUI
 
 // ─────────────────────────────────────────────────────────────────────────
 // Tiện ích: lấy displayID (số định danh màn hình) từ 1 NSScreen.
@@ -27,7 +27,7 @@ final class OverlayPanel: NSPanel {
 
 // ─────────────────────────────────────────────────────────────────────────
 // View nền: chỉ để "dán" ảnh đóng băng vào layer (rẻ hơn vẽ lại ảnh full màn
-// hình mỗi lần rê chuột). SelectionView nằm ĐÈ lên trên nó và khoét lỗ để lộ
+// hình mỗi lần rê chuột). Lớp SwiftUI nằm ĐÈ lên trên nó và khoét lỗ để lộ
 // đúng vùng chọn với độ sáng gốc.
 // ─────────────────────────────────────────────────────────────────────────
 final class FrozenBackdropView: NSView {
@@ -35,116 +35,99 @@ final class FrozenBackdropView: NSView {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// View vẽ lớp tối mờ + khung chọn + gợi ý snap, và bắt sự kiện chuột.
+// Trạng thái của lớp phủ chọn vùng. View bắt sự kiện ghi vào đây, SwiftUI đọc ra.
 // ─────────────────────────────────────────────────────────────────────────
-final class SelectionView: NSView {
-    // Callback trả kết quả ra ngoài (giống props onSelected / onCancel).
-    var onSelected: ((CGRect) -> Void)?   // rect theo points, gốc trên-trái màn hình
-    var onCancel: (() -> Void)?
+@MainActor
+final class SelectionModel: ObservableObject {
+    @Published var currentRect: CGRect = .zero
+    @Published var hover: SnapTarget?
+    @Published var cursor: CGPoint = .zero
+    @Published var dragging = false
+    @Published var interacted = false        // đã kéo/bấm lần nào chưa (để ẩn hint)
+    @Published var guideXs: [CGFloat] = []   // đường gióng khi cạnh bị hút
+    @Published var guideYs: [CGFloat] = []
 
-    var scaleFactor: CGFloat = 2           // để hiện kích thước theo pixel
-    var hintText: String = "Drag to capture"   // gợi ý hiện giữa màn khi chưa kéo
-
-    // Ảnh đóng băng của màn hình (dùng cho kính lúp). nil = chế độ cũ, overlay trong suốt.
-    var frozen: CGImage?
-    // Hai lớp bắt dính: hình học cửa sổ + phân tích pixel.
-    var windows = WindowSnapper.empty
+    var frozen: CGImage?                     // nil = overlay trong suốt, không có kính lúp
+    var scaleFactor: CGFloat = 2             // để hiện kích thước theo pixel
+    var hintText = "Drag to capture"
     var snapEnabled = true
-    var snap: SnapEngine? { didSet { refreshHover(); needsDisplay = true } }
+}
 
-    private var startPoint: NSPoint?
-    private var currentRect: CGRect = .zero
-    private var dragging = false
-    private var interacted = false          // đã kéo/bấm lần nào chưa (để ẩn hint)
-    private var hover: SnapTarget?          // khung item đang được gợi ý dưới con trỏ
-    private var cursor: NSPoint = .zero
-    private var freeMode = false            // giữ ⌥ = tắt bắt dính
-    private var guideXs: [CGFloat] = []     // đường gióng khi cạnh bị hút
-    private var guideYs: [CGFloat] = []
+// ─────────────────────────────────────────────────────────────────────────
+// Toàn bộ phần nhìn thấy của lớp phủ chọn vùng.
+// ─────────────────────────────────────────────────────────────────────────
+struct SelectionOverlay: View {
+    @ObservedObject var model: SelectionModel
 
-    private let dragThreshold: CGFloat = 4  // xê dưới mức này vẫn tính là "bấm", không phải "kéo"
-    private let snapRadius: CGFloat = 9     // bán kính hút (points) — macshot chỉ 4
+    private let loupeSide: CGFloat = 128
 
-    // Lật trục y: gốc toạ độ về góc TRÊN-trái, khớp với ảnh CGImage → đỡ phải convert.
-    override var isFlipped: Bool { true }
-    override var acceptsFirstResponder: Bool { true }
+    var body: some View {
+        GeometryReader { geo in
+            let bounds = CGRect(origin: .zero, size: geo.size)
+            ZStack(alignment: .topLeading) {
+                Canvas { ctx, size in paint(&ctx, size: size) }
 
-    // Con trỏ hình chữ thập như mọi tool chụp màn hình.
-    override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .crosshair)
-    }
+                if !model.interacted {
+                    OverlayHint(title: model.hintText, subtitle: hintSubtitle)
+                        .padding(.bottom, 96)
+                        .frame(width: geo.size.width, height: geo.size.height, alignment: .bottom)
+                }
 
-    // Cần tracking area thì mouseMoved mới được gọi (để dò item dưới con trỏ).
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(
-            rect: .zero, options: [.activeAlways, .inVisibleRect, .mouseMoved, .mouseEnteredAndExited],
-            owner: self, userInfo: nil))
-    }
-
-    // ── Vẽ ───────────────────────────────────────────────────────────────
-    //
-    // Bảng màu & khoảng cách gom về một chỗ cho dễ chỉnh.
-    override func draw(_ dirtyRect: NSRect) {
-        // 1. Phủ tối toàn bộ màn hình. Không có ảnh đóng băng (overlay trong suốt,
-        //    nền là màn hình sống) thì phủ nhạt hơn cho đỡ chói.
-        NSColor(srgbRed: 0.02, green: 0.02, blue: 0.04,
-                alpha: frozen == nil ? 0.34 : OverlayChrome.dimAlpha).setFill()
-        bounds.fill()
-
-        if !currentRect.isEmpty {
-            punch(currentRect)
-            drawGuides(around: currentRect)
-            strokeSelection(currentRect)
-            drawHandles(currentRect)
-            drawBadge(sizeText(of: currentRect), for: currentRect, accent: false)
-        } else if let hover {
-            // Chưa kéo: khoanh sẵn item dưới con trỏ, bấm 1 phát là chụp đúng nó.
-            punch(hover.rect)
-            NSColor.controlAccentColor.withAlphaComponent(0.12).setFill()
-            hover.rect.fill()
-            strokeHover(hover.rect)
-            let kind = hover.isWindow ? "Window" : "Item"
-            drawBadge("\(kind)   \(sizeText(of: hover.rect))", for: hover.rect, accent: true)
-        } else {
-            drawCrosshair()
+                badge(in: bounds)
+                loupe(in: bounds)
+            }
         }
-
-        if !interacted { drawHint() }
-        if frozen != nil, currentRect.isEmpty || dragging { drawLoupe() }
+        .ignoresSafeArea()
     }
 
-    /// "Khoét" vùng chọn cho trong suốt (lộ ảnh đóng băng / màn hình thật bên dưới).
-    private func punch(_ rect: CGRect) {
-        NSColor.clear.setFill()
-        rect.fill(using: .copy)
+    private var hintSubtitle: String {
+        model.snapEnabled
+            ? "click a highlighted area  ·  ⌥ free select  ·  esc to cancel"
+            : "⌥ free select  ·  esc to cancel"
+    }
+
+    // ── Vẽ nền: phủ tối, khoét lỗ, viền, tay nắm, đường gióng, chữ thập ──
+    private func paint(_ ctx: inout GraphicsContext, size: CGSize) {
+        let bounds = CGRect(origin: .zero, size: size)
+
+        // 1. Phủ tối toàn bộ màn hình, khoét thủng đúng vùng đang khoanh. Không
+        //    có ảnh đóng băng (overlay trong suốt, nền là màn hình sống) thì phủ
+        //    nhạt hơn cho đỡ chói.
+        let hole = model.currentRect.isEmpty ? model.hover?.rect : model.currentRect
+        var dim = Path(bounds)
+        if let hole { dim.addRect(hole) }
+        ctx.fill(dim,
+                 with: .color(Color(.sRGB, red: 0.02, green: 0.02, blue: 0.04,
+                                    opacity: model.frozen == nil ? 0.34 : OverlayChrome.dimAlpha)),
+                 style: FillStyle(eoFill: true))
+
+        if !model.currentRect.isEmpty {
+            let r = model.currentRect
+            drawGuides(&ctx, around: r, in: bounds)
+            strokeSelection(&ctx, r)
+            drawHandles(&ctx, r)
+        } else if let hover = model.hover {
+            // Chưa kéo: khoanh sẵn item dưới con trỏ, bấm 1 phát là chụp đúng nó.
+            ctx.fill(Path(hover.rect), with: .color(Color(nsColor: .controlAccentColor).opacity(0.12)))
+            ctx.stroke(Path(hover.rect.insetBy(dx: -1, dy: -1)),
+                       with: .color(Color(nsColor: .controlAccentColor)), lineWidth: 2)
+        } else {
+            drawCrosshair(&ctx, in: bounds)
+        }
     }
 
     /// Viền vùng đang kéo: 1 nét trắng nằm SÁT NGOÀI rect (nên không ăn vào vùng
     /// sẽ chụp), kèm 1 nét đen mờ bao ngoài nữa để vẫn thấy rõ trên nền trắng.
-    private func strokeSelection(_ rect: CGRect) {
-        NSColor(white: 0, alpha: 0.45).setStroke()
-        let shadow = NSBezierPath(rect: rect.insetBy(dx: -1.5, dy: -1.5))
-        shadow.lineWidth = 1
-        shadow.stroke()
-
-        NSColor.white.setStroke()
-        let line = NSBezierPath(rect: rect.insetBy(dx: -0.5, dy: -0.5))
-        line.lineWidth = 1
-        line.stroke()
-    }
-
-    private func strokeHover(_ rect: CGRect) {
-        NSColor.controlAccentColor.setStroke()
-        let line = NSBezierPath(rect: rect.insetBy(dx: -1, dy: -1))
-        line.lineWidth = 2
-        line.stroke()
+    private func strokeSelection(_ ctx: inout GraphicsContext, _ rect: CGRect) {
+        ctx.stroke(Path(rect.insetBy(dx: -1.5, dy: -1.5)),
+                   with: .color(.black.opacity(0.45)), lineWidth: 1)
+        ctx.stroke(Path(rect.insetBy(dx: -0.5, dy: -0.5)),
+                   with: .color(.white), lineWidth: 1)
     }
 
     /// Tay nắm kiểu ngoặc góc (⌐ ¬ L ⌐) + thanh nhỏ giữa cạnh, vẽ NẰM TRONG khung
     /// nên không che nội dung xung quanh. Gọn và hiện đại hơn 8 chấm tròn.
-    private func drawHandles(_ rect: CGRect) {
+    private func drawHandles(_ ctx: inout GraphicsContext, _ rect: CGRect) {
         let t: CGFloat = 3                                       // độ dày
         let arm = min(22, max(8, min(rect.width, rect.height) / 3))
         guard rect.width > t * 2, rect.height > t * 2 else { return }
@@ -175,50 +158,26 @@ final class SelectionView: NSView {
 
         // Viền tối bao quanh trước, rồi mới tô trắng lên: nếu không, tay nắm trắng
         // nằm trên nền sáng (thanh công cụ, trang web nền trắng…) là mất hút.
-        NSColor(white: 0, alpha: 0.4).setFill()
+        var halo = Path()
+        var fill = Path()
         for b in bars {
-            NSBezierPath(roundedRect: b.insetBy(dx: -1, dy: -1), xRadius: 2, yRadius: 2).fill()
+            halo.addRoundedRect(in: b.insetBy(dx: -1, dy: -1),
+                                cornerSize: CGSize(width: 2, height: 2))
+            fill.addRoundedRect(in: b, cornerSize: CGSize(width: 1.5, height: 1.5))
         }
-        NSColor.white.setFill()
-        for b in bars {
-            NSBezierPath(roundedRect: b, xRadius: 1.5, yRadius: 1.5).fill()
-        }
-    }
-
-    private func sizeText(of rect: CGRect) -> String {
-        let w = Int((rect.width * scaleFactor).rounded())
-        let h = Int((rect.height * scaleFactor).rounded())
-        return "\(w) × \(h)"
-    }
-
-    /// Nhãn của khung: mặc định nằm ngay trên góc trái, hết chỗ thì tụt xuống
-    /// dưới, chật nữa thì chui vào trong khung.
-    private func drawBadge(_ text: String, for rect: CGRect, accent: Bool) {
-        let size = text.size(withAttributes: [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)])
-        let w = size.width + 16, h = size.height + 10
-        var origin = CGPoint(x: rect.minX, y: rect.minY - h - 8)
-        if origin.y < 6 {
-            origin.y = rect.maxY + 8
-            if origin.y + h > bounds.maxY - 6 { origin.y = rect.minY + 8 }
-        }
-        origin.x = max(6, min(origin.x, bounds.maxX - w - 6))
-        OverlayChrome.drawChip(text, at: origin, accent: accent)
+        ctx.fill(halo, with: .color(.black.opacity(0.4)))
+        ctx.fill(fill, with: .color(.white))
     }
 
     /// Đường gióng ở cạnh vừa bị hút. Chỉ kéo dài ra 2 phía NGOÀI khung (không
     /// cắt ngang vùng chọn) và mờ dần ở đầu mút — đỡ rối hơn kẻ hết màn hình.
-    private func drawGuides(around rect: CGRect) {
-        guard !guideXs.isEmpty || !guideYs.isEmpty else { return }
-        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+    private func drawGuides(_ ctx: inout GraphicsContext, around rect: CGRect, in bounds: CGRect) {
+        guard !model.guideXs.isEmpty || !model.guideYs.isEmpty else { return }
         let ext: CGFloat = 130
-        let color = OverlayChrome.guide
+        let stops = Gradient(colors: [OverlayChrome.guide.opacity(0.85),
+                                      OverlayChrome.guide.opacity(0)])
 
         func fade(_ from: CGPoint, _ to: CGPoint) {
-            guard let grad = NSGradient(colors: [color.withAlphaComponent(0.85),
-                                                 color.withAlphaComponent(0)],
-                                        atLocations: [0, 1],
-                                        colorSpace: .sRGB) else { return }
             let horizontal = abs(to.x - from.x) > abs(to.y - from.y)
             let thickness: CGFloat = 1
             let r = horizontal
@@ -226,17 +185,14 @@ final class SelectionView: NSView {
                          width: abs(to.x - from.x), height: thickness)
                 : CGRect(x: from.x - thickness / 2, y: min(from.y, to.y),
                          width: thickness, height: abs(to.y - from.y))
-            ctx.saveGState()
-            NSBezierPath(rect: r).addClip()
-            grad.draw(from: from, to: to, options: [])
-            ctx.restoreGState()
+            ctx.fill(Path(r), with: .linearGradient(stops, startPoint: from, endPoint: to))
         }
 
-        for x in guideXs {
+        for x in model.guideXs {
             fade(CGPoint(x: x, y: rect.minY), CGPoint(x: x, y: max(0, rect.minY - ext)))
             fade(CGPoint(x: x, y: rect.maxY), CGPoint(x: x, y: min(bounds.maxY, rect.maxY + ext)))
         }
-        for y in guideYs {
+        for y in model.guideYs {
             fade(CGPoint(x: rect.minX, y: y), CGPoint(x: max(0, rect.minX - ext), y: y))
             fade(CGPoint(x: rect.maxX, y: y), CGPoint(x: min(bounds.maxX, rect.maxX + ext), y: y))
         }
@@ -244,68 +200,117 @@ final class SelectionView: NSView {
 
     /// Hai đường mảnh chạy qua con trỏ khi chưa có gì được khoanh — giúp gióng
     /// mắt trước lúc bấm chuột.
-    private func drawCrosshair() {
-        NSColor(white: 1, alpha: 0.20).setStroke()
-        let p = NSBezierPath()
-        p.lineWidth = 1
-        p.move(to: CGPoint(x: cursor.x + 0.5, y: 0))
-        p.line(to: CGPoint(x: cursor.x + 0.5, y: bounds.maxY))
-        p.move(to: CGPoint(x: 0, y: cursor.y + 0.5))
-        p.line(to: CGPoint(x: bounds.maxX, y: cursor.y + 0.5))
-        p.stroke()
+    private func drawCrosshair(_ ctx: inout GraphicsContext, in bounds: CGRect) {
+        var p = Path()
+        p.move(to: CGPoint(x: model.cursor.x + 0.5, y: 0))
+        p.addLine(to: CGPoint(x: model.cursor.x + 0.5, y: bounds.maxY))
+        p.move(to: CGPoint(x: 0, y: model.cursor.y + 0.5))
+        p.addLine(to: CGPoint(x: bounds.maxX, y: model.cursor.y + 0.5))
+        ctx.stroke(p, with: .color(.white.opacity(0.20)), lineWidth: 1)
     }
 
-    /// Bảng gợi ý dưới đáy màn hình, chỉ hiện khi user chưa bắt đầu thao tác.
-    /// (Để giữa màn hình thì kính lúp hay đè lên nó.)
-    private func drawHint() {
-        let title: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 15, weight: .semibold),
-            .foregroundColor: NSColor.white,
-        ]
-        let sub: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 12, weight: .regular),
-            .foregroundColor: NSColor(white: 1, alpha: 0.62),
-        ]
-        let line2 = snapEnabled
-            ? "click a highlighted area  ·  ⌥ free select  ·  esc to cancel"
-            : "⌥ free select  ·  esc to cancel"
+    // ── Nhãn kích thước ──────────────────────────────────────────────────
 
-        let s1 = hintText.size(withAttributes: title)
-        let s2 = line2.size(withAttributes: sub)
-        let padX: CGFloat = 22, padY: CGFloat = 15, gap: CGFloat = 5
-        let boxW = max(s1.width, s2.width) + padX * 2
-        let boxH = s1.height + gap + s2.height + padY * 2
-        let box = CGRect(x: (bounds.width - boxW) / 2,
-                         y: bounds.maxY - boxH - 96,   // view lật trục: maxY = đáy màn hình
-                         width: boxW, height: boxH)
-
-        let shape = NSBezierPath(roundedRect: box, xRadius: 14, yRadius: 14)
-        OverlayChrome.chipFill.setFill()
-        shape.fill()
-        OverlayChrome.chipEdge.setStroke()
-        shape.lineWidth = 1
-        shape.stroke()
-
-        hintText.draw(at: CGPoint(x: box.midX - s1.width / 2, y: box.minY + padY),
-                      withAttributes: title)
-        line2.draw(at: CGPoint(x: box.midX - s2.width / 2, y: box.minY + padY + s1.height + gap),
-                   withAttributes: sub)
+    /// Nhãn của khung: mặc định nằm ngay trên góc trái, hết chỗ thì tụt xuống
+    /// dưới, chật nữa thì chui vào trong khung.
+    @ViewBuilder
+    private func badge(in bounds: CGRect) -> some View {
+        if !model.currentRect.isEmpty {
+            chip(sizeText(of: model.currentRect), for: model.currentRect, accent: false, in: bounds)
+        } else if let hover = model.hover {
+            let kind = hover.isWindow ? "Window" : "Item"
+            chip("\(kind)   \(sizeText(of: hover.rect))", for: hover.rect, accent: true, in: bounds)
+        }
     }
 
-    // Kính lúp: phóng to vùng quanh con trỏ từ ảnh đóng băng → chọn tới từng pixel.
-    private func drawLoupe() {
-        guard let cg = frozen,
-              let box = OverlayChrome.drawLoupe(image: cg, cursor: cursor, scale: scaleFactor,
-                                                in: bounds, side: 128, zoom: 8, reserveBelow: 44)
-        else { return }
+    private func chip(_ text: String, for rect: CGRect, accent: Bool, in bounds: CGRect) -> some View {
+        let size = OverlayChrome.chipSize(text)
+        var origin = CGPoint(x: rect.minX, y: rect.minY - size.height - 8)
+        if origin.y < 6 {
+            origin.y = rect.maxY + 8
+            if origin.y + size.height > bounds.maxY - 6 { origin.y = rect.minY + 8 }
+        }
+        origin.x = max(6, min(origin.x, bounds.maxX - size.width - 6))
+        return ChipView(text: text, accent: accent)
+            .position(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
+    }
 
-        // Chip dưới kính: mã màu + toạ độ pixel.
-        let color = OverlayChrome.pixelColor(in: cg, at: cursor, scale: scaleFactor)
-        let text = "\(Int(cursor.x * scaleFactor)), \(Int(cursor.y * scaleFactor))"
-        let label = color.map { "\(OverlayChrome.hex(of: $0))  \(text)" } ?? text
-        let w = OverlayChrome.chipWidth(label, fontSize: 11, swatch: color != nil)
-        OverlayChrome.drawChip(label, at: CGPoint(x: box.midX - w / 2, y: box.maxY + 6),
-                               fontSize: 11, swatch: color)
+    private func sizeText(of rect: CGRect) -> String {
+        let w = Int((rect.width * model.scaleFactor).rounded())
+        let h = Int((rect.height * model.scaleFactor).rounded())
+        return "\(w) × \(h)"
+    }
+
+    // ── Kính lúp ─────────────────────────────────────────────────────────
+
+    /// Kính lúp phóng vùng quanh con trỏ từ ảnh đóng băng → chọn tới từng pixel.
+    /// Chỉ hiện khi chưa khoanh gì, hoặc đang kéo.
+    @ViewBuilder
+    private func loupe(in bounds: CGRect) -> some View {
+        if let cg = model.frozen, model.currentRect.isEmpty || model.dragging {
+            let box = OverlayChrome.loupeBox(cursor: model.cursor, in: bounds,
+                                             side: loupeSide, reserveBelow: 44)
+            let color = OverlayChrome.pixelColor(in: cg, at: model.cursor, scale: model.scaleFactor)
+            let coords = "\(Int(model.cursor.x * model.scaleFactor)), "
+                + "\(Int(model.cursor.y * model.scaleFactor))"
+            let label = color.map { "\(OverlayChrome.hex(of: $0))  \(coords)" } ?? coords
+            let chipH = OverlayChrome.chipSize(label, fontSize: 11, swatch: color != nil).height
+
+            LoupeView(image: cg, cursor: model.cursor, scale: model.scaleFactor,
+                      side: loupeSide, zoom: 8)
+                .position(x: box.midX, y: box.midY)
+
+            // Chip dưới kính: mã màu + toạ độ pixel.
+            ChipView(text: label, fontSize: 11, swatch: color.map { Color(nsColor: $0) })
+                .position(x: box.midX, y: box.maxY + 6 + chipH / 2)
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// View bắt sự kiện chuột/phím + lo phần bắt dính. Trong suốt, nằm đè lên lớp vẽ.
+// ─────────────────────────────────────────────────────────────────────────
+final class SelectionEventView: NSView {
+    // Callback trả kết quả ra ngoài (giống props onSelected / onCancel).
+    var onSelected: ((CGRect) -> Void)?   // rect theo points, gốc trên-trái màn hình
+    var onCancel: (() -> Void)?
+
+    let model: SelectionModel
+
+    // Hai lớp bắt dính: hình học cửa sổ + phân tích pixel.
+    var windows = WindowSnapper.empty
+    var snap: SnapEngine? { didSet { refreshHover() } }
+
+    private var startPoint: NSPoint?
+    private var freeMode = false            // giữ ⌥ = tắt bắt dính
+
+    private let dragThreshold: CGFloat = 4  // xê dưới mức này vẫn tính là "bấm", không phải "kéo"
+    private let snapRadius: CGFloat = 9     // bán kính hút (points) — macshot chỉ 4
+
+    init(frame: NSRect, model: SelectionModel) {
+        self.model = model
+        super.init(frame: frame)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) chưa dùng tới") }
+
+    // Lật trục y: gốc toạ độ về góc TRÊN-trái, khớp với SwiftUI và ảnh CGImage.
+    override var isFlipped: Bool { true }
+    override var acceptsFirstResponder: Bool { true }
+
+    // Con trỏ hình chữ thập như mọi tool chụp màn hình.
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .crosshair)
+    }
+
+    // Cần tracking area thì mouseMoved mới được gọi (để dò item dưới con trỏ).
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(
+            rect: .zero, options: [.activeAlways, .inVisibleRect, .mouseMoved, .mouseEnteredAndExited],
+            owner: self, userInfo: nil))
     }
 
     // ── Bắt dính ─────────────────────────────────────────────────────────
@@ -313,20 +318,20 @@ final class SelectionView: NSView {
     /// Đặt vị trí con trỏ ban đầu (lúc overlay vừa mở, chưa có mouseMoved nào)
     /// để khung gợi ý hiện ngay dưới chuột thay vì nằm ở góc màn hình.
     func primeCursor(_ p: NSPoint) {
-        cursor = p
+        model.cursor = p
         refreshHover()
     }
 
     /// Dò item dưới con trỏ: ưu tiên khung do phân tích pixel tìm ra, không có
     /// thì lấy nguyên cửa sổ.
     private func refreshHover() {
-        guard snapEnabled, !freeMode, !dragging else {
-            if hover != nil { hover = nil; needsDisplay = true }
+        guard model.snapEnabled, !freeMode, !model.dragging else {
+            if model.hover != nil { model.hover = nil }
             return
         }
-        let win = windows.window(at: cursor)
+        let win = windows.window(at: model.cursor)
         var found: SnapTarget?
-        if let el = snap?.element(at: cursor, within: win ?? bounds) {
+        if let el = snap?.element(at: model.cursor, within: win ?? bounds) {
             // Khung dò được gần trùng cửa sổ → lấy hẳn số đo cửa sổ cho chuẩn.
             if let win, abs(el.minX - win.minX) < 4, abs(el.minY - win.minY) < 4,
                abs(el.maxX - win.maxX) < 4, abs(el.maxY - win.maxY) < 4 {
@@ -337,14 +342,15 @@ final class SelectionView: NSView {
         } else if let win {
             found = SnapTarget(rect: win, isWindow: true)
         }
-        if found != hover { hover = found; needsDisplay = true }
+        if found != model.hover { model.hover = found }
     }
 
     /// Hút 4 cạnh của khung đang kéo về biên gần nhất: cạnh cửa sổ (chính xác
     /// tuyệt đối) trước, rồi mới tới biên dò từ pixel.
     private func snapped(_ r: CGRect) -> CGRect {
-        guideXs = []; guideYs = []
-        guard snapEnabled, !freeMode else { return r }
+        var gx: [CGFloat] = [], gy: [CGFloat] = []
+        defer { model.guideXs = gx; model.guideYs = gy }
+        guard model.snapEnabled, !freeMode else { return r }
 
         var minX = r.minX, maxX = r.maxX, minY = r.minY, maxY = r.maxY
 
@@ -368,10 +374,10 @@ final class SelectionView: NSView {
         let (ny1, h3) = snapLine(maxY, geo: windows.edgeYs) {
             snap?.snapY(near: maxY, from: minX, to: maxX, radius: snapRadius)
         }
-        if h0 { guideXs.append(nx0) }
-        if h1 { guideXs.append(nx1) }
-        if h2 { guideYs.append(ny0) }
-        if h3 { guideYs.append(ny1) }
+        if h0 { gx.append(nx0) }
+        if h1 { gx.append(nx1) }
+        if h2 { gy.append(ny0) }
+        if h3 { gy.append(ny1) }
         minX = nx0; maxX = nx1; minY = ny0; maxY = ny1
 
         guard maxX - minX >= 1, maxY - minY >= 1 else { return r }
@@ -380,50 +386,47 @@ final class SelectionView: NSView {
 
     // ── Sự kiện chuột / phím ─────────────────────────────────────────────
     override func mouseMoved(with event: NSEvent) {
-        cursor = convert(event.locationInWindow, from: nil)
+        model.cursor = convert(event.locationInWindow, from: nil)
         freeMode = event.modifierFlags.contains(.option)
         refreshHover()
-        if frozen != nil { needsDisplay = true }   // kính lúp bám theo con trỏ
     }
 
     override func flagsChanged(with event: NSEvent) {
         let free = event.modifierFlags.contains(.option)
         guard free != freeMode else { return }
         freeMode = free
-        if dragging, let start = startPoint {
-            currentRect = rect(from: start, to: cursor)
+        if model.dragging, let start = startPoint {
+            model.currentRect = rect(from: start, to: model.cursor)
         }
         refreshHover()
-        needsDisplay = true
     }
 
     override func mouseDown(with event: NSEvent) {
         startPoint = convert(event.locationInWindow, from: nil)
-        cursor = startPoint ?? .zero
-        currentRect = .zero
-        dragging = false
-        interacted = true
-        needsDisplay = true
+        model.cursor = startPoint ?? .zero
+        model.currentRect = .zero
+        model.dragging = false
+        model.interacted = true
     }
 
     override func mouseDragged(with event: NSEvent) {
         guard let start = startPoint else { return }
-        cursor = convert(event.locationInWindow, from: nil)
+        model.cursor = convert(event.locationInWindow, from: nil)
         freeMode = event.modifierFlags.contains(.option)
         // Bấm chuột bao giờ cũng xê vài pixel (trackpad càng rõ). Chỉ tính là KÉO
         // khi vượt ngưỡng — chưa vượt thì giữ nguyên `hover`, để thả ra vẫn chụp
         // được đúng cửa sổ đang khoanh thay vì bị huỷ.
-        if !dragging {
-            guard hypot(cursor.x - start.x, cursor.y - start.y) >= dragThreshold else { return }
-            dragging = true
-            hover = nil
+        if !model.dragging {
+            guard hypot(model.cursor.x - start.x, model.cursor.y - start.y) >= dragThreshold
+            else { return }
+            model.dragging = true
+            model.hover = nil
         }
-        currentRect = rect(from: start, to: cursor)
-        needsDisplay = true
+        model.currentRect = rect(from: start, to: model.cursor)
     }
 
     // Chuẩn hoá để kéo theo hướng nào cũng ra rect dương, rồi cho bắt dính.
-    private func rect(from start: NSPoint, to p: NSPoint) -> CGRect {
+    private func rect(from start: NSPoint, to p: CGPoint) -> CGRect {
         let raw = CGRect(x: min(start.x, p.x), y: min(start.y, p.y),
                          width: abs(p.x - start.x), height: abs(p.y - start.y))
         guard raw.width >= 3, raw.height >= 3 else { return raw }
@@ -431,9 +434,9 @@ final class SelectionView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
-        if dragging, currentRect.width >= 5, currentRect.height >= 5 {
-            onSelected?(currentRect)
-        } else if let hover {
+        if model.dragging, model.currentRect.width >= 5, model.currentRect.height >= 5 {
+            onSelected?(model.currentRect)
+        } else if let hover = model.hover {
             // Bấm 1 phát (không kéo) lên vùng đang được khoanh → chụp đúng vùng đó.
             onSelected?(hover.rect)
         } else {
@@ -462,19 +465,21 @@ final class RegionSelectionController {
 
     func begin(on screen: NSScreen, frozen: CGImage? = nil, completion: @escaping (CGRect?) -> Void) {
         let size = screen.frame.size
-        let view = SelectionView(frame: NSRect(origin: .zero, size: size))
+        let model = SelectionModel()
         // Tỉ lệ point→pixel lấy từ chính ảnh đóng băng (khớp với ảnh sẽ cắt ra),
         // không có ảnh thì mới dùng backingScaleFactor.
-        view.scaleFactor = frozen.map { CGFloat($0.width) / max(size.width, 1) }
+        model.scaleFactor = frozen.map { CGFloat($0.width) / max(size.width, 1) }
             ?? screen.backingScaleFactor
-        view.autoresizingMask = [.width, .height]
-        view.frozen = frozen
-        view.snapEnabled = AppSettings.shared.snapToEdges
-        view.hintText = view.snapEnabled
+        model.frozen = frozen
+        model.snapEnabled = AppSettings.shared.snapToEdges
+        model.hintText = model.snapEnabled
             ? "Drag to capture · click a highlighted area · ⌥ free · esc"
             : "Drag to capture · esc to cancel"
+
+        let view = SelectionEventView(frame: NSRect(origin: .zero, size: size), model: model)
+        view.autoresizingMask = [.width, .height]
         // Lấy danh sách cửa sổ TRƯỚC khi overlay hiện lên (khỏi dính chính mình).
-        if view.snapEnabled {
+        if model.snapEnabled {
             view.windows = WindowSnapper.snapshot(on: screen)
             // Chuột đang ở đâu → khoanh sẵn ngay chỗ đó (mouseMoved chưa bắn lần nào).
             let m = NSEvent.mouseLocation
@@ -499,7 +504,12 @@ final class RegionSelectionController {
         backdrop.layer?.contentsGravity = .resize
         backdrop.layer?.contentsScale = screen.backingScaleFactor
         backdrop.layer?.contents = frozen
-        backdrop.addSubview(view)
+
+        let chrome = PassthroughHostingView(rootView: SelectionOverlay(model: model))
+        chrome.frame = NSRect(origin: .zero, size: size)
+        chrome.autoresizingMask = [.width, .height]
+        backdrop.addSubview(chrome)
+        backdrop.addSubview(view)          // lớp bắt sự kiện nằm trên cùng
 
         let win = OverlayPanel(contentRect: screen.frame,
                                styleMask: [.borderless, .nonactivatingPanel],
@@ -538,7 +548,7 @@ final class RegionSelectionController {
 
         // Phân tích biên ảnh ở luồng nền (~20-40ms). Trong lúc chờ, snap vẫn
         // chạy được bằng hình học cửa sổ.
-        if let frozen, view.snapEnabled {
+        if let frozen, model.snapEnabled {
             let scale = CGFloat(frozen.width) / max(size.width, 1)
             Task { [weak view] in
                 let engine = await Task.detached(priority: .userInitiated) {

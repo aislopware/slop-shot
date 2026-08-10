@@ -127,6 +127,9 @@ private struct DestinationTab: View {
 // ── Tab Shortcuts (bind lại được) ───────────────────────────────────────────
 private struct ShortcutsTab: View {
     @ObservedObject var settings: AppSettings
+    /// Ô nào đang lắng nghe phím. Giữ ở ĐÂY (không phải trong từng ô) để bấm
+    /// sang ô khác thì ô cũ tự nhả ra — chỉ một bộ bắt phím sống tại một thời điểm.
+    @State private var recordingAction: ShortcutAction?
 
     var body: some View {
         Form {
@@ -136,7 +139,12 @@ private struct ShortcutsTab: View {
                         Text(action.title)
                         Spacer()
                         // Bấm vào ô → gõ tổ hợp mới để gán.
-                        ShortcutRecorder(display: settings.hotkey(for: action).display) { hk in
+                        ShortcutRecorder(
+                            display: settings.hotkey(for: action).display,
+                            isRecording: Binding(
+                                get: { recordingAction == action },
+                                set: { recordingAction = $0 ? action : nil })
+                        ) { hk in
                             settings.setHotkey(hk, for: action)
                         }
                         .frame(width: 110, height: 22)
@@ -158,71 +166,61 @@ private struct ShortcutsTab: View {
 
 // ─────────────────────────────────────────────────────────────────────────
 // Ô ghi phím tắt: bấm vào để "lắng nghe", gõ tổ hợp → trả về Hotkey.
-// Bọc 1 NSView tự vẽ (AppKit) vì SwiftIU thuần khó bắt phím thô + modifier.
+//
+// Hình hài là SwiftUI; riêng phần BẮT PHÍM phải mượn NSEvent monitor: SwiftUI
+// không có cách nào đọc phím thô kèm modifier rồi NUỐT luôn phím đó (trả nil)
+// — mà nuốt là bắt buộc, không thì gõ ⌘W lúc đang gán sẽ đóng cửa sổ.
 // ─────────────────────────────────────────────────────────────────────────
-private struct ShortcutRecorder: NSViewRepresentable {
+private struct ShortcutRecorder: View {
     let display: String
+    @Binding var isRecording: Bool
     let onCapture: (Hotkey) -> Void
 
-    func makeNSView(context: Context) -> RecorderView {
-        let v = RecorderView()
-        v.onCapture = onCapture
-        v.displayText = display
-        return v
-    }
-    func updateNSView(_ v: RecorderView, context: Context) {
-        v.onCapture = onCapture
-        if !v.recording { v.displayText = display; v.needsDisplay = true }
-    }
-}
+    @State private var monitor: Any?
 
-private final class RecorderView: NSView {
-    var displayText = ""
-    var onCapture: ((Hotkey) -> Void)?
-    var recording = false
-
-    override var acceptsFirstResponder: Bool { true }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let bg = recording ? NSColor.controlAccentColor.withAlphaComponent(0.18)
-                           : NSColor.controlBackgroundColor
-        bg.setFill()
-        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 5, yRadius: 5)
-        path.fill()
-        (recording ? NSColor.controlAccentColor : NSColor.separatorColor).setStroke()
-        path.lineWidth = 1; path.stroke()
-
-        let text = recording ? "Type shortcut…" : (displayText.isEmpty ? "—" : displayText)
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 12, weight: .medium),
-            .foregroundColor: recording ? NSColor.controlAccentColor : NSColor.labelColor,
-        ]
-        let size = text.size(withAttributes: attrs)
-        text.draw(at: CGPoint(x: (bounds.width - size.width) / 2,
-                              y: (bounds.height - size.height) / 2), withAttributes: attrs)
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        recording = true
-        window?.makeFirstResponder(self)
-        needsDisplay = true
-    }
-
-    override func keyDown(with event: NSEvent) {
-        guard recording else { super.keyDown(with: event); return }
-        if event.keyCode == 53 {                 // ⎋ → huỷ
-            recording = false; needsDisplay = true; return
+    var body: some View {
+        Button { isRecording = true } label: {
+            Text(isRecording ? "Type shortcut…" : (display.isEmpty ? "—" : display))
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(isRecording ? Color.accentColor : Color.primary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(isRecording ? Color.accentColor.opacity(0.18)
+                                        : Color(nsColor: .controlBackgroundColor),
+                            in: RoundedRectangle(cornerRadius: 5))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 5)
+                        .stroke(isRecording ? Color.accentColor : Color(nsColor: .separatorColor),
+                                lineWidth: 1)
+                }
+                .contentShape(Rectangle())
         }
-        let mods = Hotkey.carbonModifiers(from: event.modifierFlags)
-        guard mods != 0 else { NSSound.beep(); return }   // bắt buộc có modifier
-        recording = false
-        onCapture?(Hotkey(keyCode: UInt32(event.keyCode), modifiers: mods))
-        needsDisplay = true
+        .buttonStyle(.plain)
+        .onChange(of: isRecording) { _, on in on ? listen() : deafen() }
+        .onDisappear { deafen() }
     }
 
-    override func resignFirstResponder() -> Bool {
-        recording = false; needsDisplay = true
-        return true
+    private func listen() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let code = event.keyCode
+            let mods = Hotkey.carbonModifiers(from: event.modifierFlags)
+            MainActor.assumeIsolated {
+                if code == 53 {                       // ⎋ → huỷ
+                    isRecording = false
+                } else if mods == 0 {
+                    NSSound.beep()                    // bắt buộc có modifier
+                } else {
+                    onCapture(Hotkey(keyCode: UInt32(code), modifiers: mods))
+                    isRecording = false
+                }
+            }
+            return nil                                // nuốt phím, không cho lọt ra ngoài
+        }
+    }
+
+    private func deafen() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
     }
 }
 
