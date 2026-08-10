@@ -8,7 +8,7 @@ import UniformTypeIdentifiers
 // ─────────────────────────────────────────────────────────────────────────
 enum Tool: String, CaseIterable, Identifiable {
     // .image KHÔNG có nút trên toolbar — chỉ sinh ra khi paste ảnh (⌘V).
-    case select, rect, ellipse, line, arrow, highlight, pen, text, counter, image
+    case select, rect, ellipse, line, arrow, highlight, blur, pen, text, counter, image
     var id: String { rawValue }
 
     var icon: String {
@@ -19,6 +19,7 @@ enum Tool: String, CaseIterable, Identifiable {
         case .line:      return "line.diagonal"
         case .arrow:     return "arrow.up.right"
         case .highlight: return "highlighter"
+        case .blur:      return "drop.fill"
         case .pen:       return "pencil.tip"
         case .text:      return "textformat"
         case .counter:   return "1.circle"
@@ -33,6 +34,7 @@ enum Tool: String, CaseIterable, Identifiable {
         case .line:      return "Line"
         case .arrow:     return "Arrow"
         case .highlight: return "Highlight"
+        case .blur:      return "Blur"
         case .pen:       return "Pen"
         case .text:      return "Text"
         case .counter:   return "Counter"
@@ -271,9 +273,9 @@ struct EditorView: View {
 
                     Canvas { ctx, _ in
                         for a in annotations where a.id != editingID {
-                            Self.draw(a, size: size, in: &ctx)
+                            Self.draw(a, base: image, size: size, in: &ctx)
                         }
-                        if let c = current { Self.draw(c, size: size, in: &ctx) }
+                        if let c = current { Self.draw(c, base: image, size: size, in: &ctx) }
                         // Khung + 4 handle góc khi đang chọn ảnh (chỉ ở tool Select).
                         if tool == .select, let a = selectedImage {
                             Self.drawHandles(a, size: size, in: &ctx)
@@ -357,7 +359,7 @@ struct EditorView: View {
             divider
             toolButton(.rect); toolButton(.ellipse); toolButton(.line); toolButton(.arrow)
             divider
-            toolButton(.highlight); toolButton(.pen)
+            toolButton(.highlight); toolButton(.blur); toolButton(.pen)
             divider
             toolButton(.text); toolButton(.counter)
         }
@@ -427,7 +429,7 @@ struct EditorView: View {
         }
         .buttonStyle(.plain)
         .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
-        .help("Stroke width")
+        .help("Stroke width · blur strength")
         .popover(isPresented: $showWidthPopover, arrowEdge: .bottom) {
             VStack(spacing: 2) {
                 ForEach(widths, id: \.0) { name, w in
@@ -833,8 +835,17 @@ struct EditorView: View {
             }
     }
 
+    // Độ mờ tính theo TỈ LỆ bề ngang ảnh (không theo kích thước khung vẽ) → xem
+    // trước ở mọi mức zoom và ảnh xuất ra full-res đều mờ y như nhau, mà lại
+    // dùng chung được một ảnh đã mờ trong cache.
+    private static func blurFraction(_ a: Annotation) -> CGFloat {
+        max(a.lineWidth * 4, 0.004)
+    }
+
     // ── Draw one annotation, scaling normalized coords to `size` ───────────
-    private static func draw(_ a: Annotation, size s: CGSize, in ctx: inout GraphicsContext) {
+    // `base` = ảnh nền, chỉ tool .blur cần (nó vẽ lại chính ảnh nền đã làm mờ).
+    private static func draw(_ a: Annotation, base: NSImage?, size s: CGSize,
+                             in ctx: inout GraphicsContext) {
         func P(_ n: CGPoint) -> CGPoint { CGPoint(x: n.x * s.width, y: n.y * s.height) }
         guard let n0 = a.points.first else { return }
         let start = P(n0)
@@ -877,6 +888,23 @@ struct EditorView: View {
             var p = Path(); p.move(to: start); p.addLine(to: end)
             ctx.stroke(p, with: .color(a.color.opacity(0.35)),
                        style: StrokeStyle(lineWidth: 0.03 * s.width, lineCap: .round))
+        case .blur:
+            // Vẽ lại ẢNH NỀN đã làm mờ sẵn, cắt đúng khung đã kéo.
+            //
+            // KHÔNG dùng ctx.addFilter(.blur): clip không chặn được kết quả của
+            // filter, vết mờ tràn ra ngoài khung một quầng bằng đúng bán kính mờ.
+            // Làm mờ trước bằng Core Image rồi cắt một ảnh thường thì mép sắc lẹm.
+            // Ảnh mờ được cache nên kéo chuột không phải tính lại từng frame.
+            guard let base, let blurred = BlurCache.blurred(base, fraction: blurFraction(a))
+            else { return }
+            let r = rect(start, end)
+            guard r.width > 1, r.height > 1 else { return }
+            ctx.drawLayer { layer in
+                layer.clip(to: Path(roundedRect: r,
+                                    cornerRadius: min(6, min(r.width, r.height) / 4)))
+                layer.draw(Image(nsImage: blurred).interpolation(.high),
+                           in: CGRect(origin: .zero, size: s))
+            }
         case .pen:
             var p = Path(); p.move(to: start)
             for pt in a.points.dropFirst() { p.addLine(to: P(pt)) }
@@ -937,7 +965,7 @@ struct EditorView: View {
             Image(nsImage: image).resizable().interpolation(.high)
                 .frame(width: px.width, height: px.height)
             Canvas { ctx, _ in
-                for a in annotations { Self.draw(a, size: px, in: &ctx) }
+                for a in annotations { Self.draw(a, base: image, size: px, in: &ctx) }
             }
             .frame(width: px.width, height: px.height)
         }
@@ -1011,6 +1039,43 @@ struct EditorView: View {
         } catch {
             status = "Save failed"
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Ảnh nền đã làm mờ, dùng cho tool Blur.
+//
+// Làm mờ NGUYÊN ảnh một lần rồi cache, chứ không mờ từng khung: kéo chuột là
+// vẽ lại canvas liên tục, mờ lại mỗi frame thì giật ngay. Đằng nào các khung
+// blur trên cùng một ảnh cũng dùng chung một độ mờ.
+// ─────────────────────────────────────────────────────────────────────────
+@MainActor
+enum BlurCache {
+    private static var cache: [String: NSImage] = [:]
+    private static let ciContext = CIContext()
+
+    /// `fraction` = bán kính mờ tính theo tỉ lệ bề ngang ảnh.
+    static func blurred(_ base: NSImage, fraction: CGFloat) -> NSImage? {
+        guard let cg = ImageOps.cg(base) else { return nil }
+        let radius = max(fraction * CGFloat(cg.width), 1)
+        let key = "\(ObjectIdentifier(base).hashValue)-\(Int(radius.rounded()))"
+        if let hit = cache[key] { return hit }
+
+        let ci = CIImage(cgImage: cg)
+        // clampedToExtent: không có nó thì mép ảnh mờ dần ra trong suốt, khung
+        // blur đặt sát mép ảnh sẽ bị nhạt đi một dải.
+        guard let filter = CIFilter(name: "CIGaussianBlur", parameters: [
+            kCIInputImageKey: ci.clampedToExtent(),
+            kCIInputRadiusKey: radius,
+        ]),
+            let out = filter.outputImage,
+            let outCG = ciContext.createCGImage(out, from: ci.extent)
+        else { return nil }
+
+        let img = NSImage(cgImage: outCG, size: base.size)
+        if cache.count > 6 { cache.removeAll() }   // đổi ảnh nền/độ mờ liên tục thì dọn cho nhẹ
+        cache[key] = img
+        return img
     }
 }
 
