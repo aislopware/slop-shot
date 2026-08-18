@@ -1,4 +1,6 @@
 build/
+dist/
+.work/
 *.xcodeproj
 .DS_Store
 xcuserdata/

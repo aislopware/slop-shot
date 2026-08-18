@@ -1,0 +1,258 @@
+# Release pipeline: tag → DMG đã ký + notarize → GitHub Release → Homebrew tap.
+#
+# ⚠ REPO NÀY PUBLIC — mọi dòng workflow này in ra là công khai vĩnh viễn. Bước duy nhất chạm
+# vào vật liệu ký có mask từng giá trị bằng `::add-mask::` TRƯỚC khi bất cứ thứ gì kịp echo nó,
+# và không bao giờ đẩy secret qua ranh giới step bằng `$GITHUB_ENV`. Giữ nguyên như vậy.
+#
+# VÌ SAO credential đến từ better-update chứ không phải GitHub secrets: Developer ID là của
+# WEEBUILD VIET NAM và dùng chung cho nhiều sản phẩm (slop-desk, idealabs desktop, và đây); nó
+# nằm một chỗ duy nhất trong vault E2E của better-update và mọi pipeline kéo từ đó. GitHub secret
+# DUY NHẤT ở repo này là BETTER_UPDATE_ROBOT — token robot để mở vault. Cách dựng và danh sách
+# biến đầy đủ: docs/release-pipeline.md.
+name: Release
+
+run-name: "Release ${{ inputs.version || github.ref_name }}${{ inputs.dry-run && ' (dry run)' || '' }}"
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Marketing version cần build, không có chữ v (vd 0.1.0)
+        type: string
+        required: true
+      dry-run:
+        description: "Dry run — VẪN ký Developer ID rồi dừng: không notarize, không tạo Release, không bump tap"
+        type: boolean
+        default: true
+
+# Mỗi lần một release. Đừng bao giờ cancel một lượt notarize đang chạy: Apple tính lượt nộp đó
+# dù sao đi nữa, và huỷ giữa chừng để lại artifact đã ký nhưng chưa staple.
+concurrency: release
+
+permissions: {}
+
+jobs:
+  # ── build + sign + notarize ───────────────────────────────────────────────────────────────
+  package:
+    name: Build, sign, notarize
+    runs-on: macos-26
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.version }}" ]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          case "${version}" in
+            v*) echo "::error::version không được có chữ v đằng trước: ${version}"; exit 1 ;;
+            "") echo "::error::version rỗng"; exit 1 ;;
+          esac
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      # Fail trong vài giây thay vì sau một bản build đã ký và đã notarize. Job publish cần mục
+      # này tồn tại; biết điều đó ở CUỐI pipeline nghĩa là một cái tag vừa đốt một lượt nộp Apple
+      # mà vẫn không release được.
+      - name: Kiểm tra CHANGELOG có mục cho version này
+        run: scripts/changelog-section.sh "${{ steps.version.outputs.version }}" > /dev/null
+
+      - name: Cài XcodeGen
+        run: brew install xcodegen
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # MỘT step cho mọi thứ chạm vào vật liệu ký: pull → mask → source → import → build → ký →
+      # notarize. Không secret nào vượt ranh giới step, nên không có `$GITHUB_ENV` hay `set -x`
+      # của step sau nào làm lộ được.
+      - name: Build, sign and notarize
+        env:
+          BETTER_UPDATE_ROBOT: ${{ secrets.BETTER_UPDATE_ROBOT }}
+          SLOPSHOT_VERSION: ${{ steps.version.outputs.version }}
+          SLOPSHOT_BUILD_NUMBER: ${{ github.run_number }}
+          SLOPSHOT_SKIP_NOTARIZE: ${{ inputs.dry-run && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          umask 077
+
+          # Ghim version, không dùng @latest: minimumReleaseAge của bun giữ lại các bản publish
+          # trong 24h, nên @latest có thể âm thầm rơi về một build cũ hơn mức server chấp nhận.
+          bun add -g @better-update/cli@0.73.2
+          vault="${RUNNER_TEMP}/vault.sh"
+          better-update env pull --environment production --stdout > "${vault}"
+
+          # Mask TRƯỚC. `env pull --stdout` in ra các dòng `export KEY='value'`; một giá trị kịp
+          # tới log trước khi mask của nó được đăng ký là công khai vĩnh viễn.
+          while IFS= read -r line; do
+            case "${line}" in export\ *) ;; *) continue ;; esac
+            value="${line#*=}"
+            value="${value#\'}"
+            value="${value%\'}"
+            [ -n "${value}" ] && echo "::add-mask::${value}"
+          done < "${vault}"
+
+          # shellcheck disable=SC1090
+          . "${vault}"
+          rm -f "${vault}"
+
+          # Keychain dùng một lần, chỉ mở trong job này. Runner là ephemeral, nhưng đổi thẳng
+          # default keychain thì trên một runner self-hosted nó sống lâu hơn cái step này.
+          keychain="${RUNNER_TEMP}/slopshot-build.keychain-db"
+          keychain_password="$(uuidgen)"
+          echo "::add-mask::${keychain_password}"
+          security create-keychain -p "${keychain_password}" "${keychain}"
+          security set-keychain-settings -lut 7200 "${keychain}"
+          security unlock-keychain -p "${keychain_password}" "${keychain}"
+          # THÊM vào đầu search list chứ không thay thế: `security create-keychain` không tự thêm
+          # keychain vào list, còn `-s "${keychain}"` một mình sẽ hất login keychain ra khỏi danh
+          # sách mà toolchain Xcode vẫn đang đọc.
+          existing="$(security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"$//')"
+          # shellcheck disable=SC2086
+          security list-keychains -d user -s "${keychain}" ${existing}
+
+          p12="${RUNNER_TEMP}/developer-id.p12"
+          printf '%s' "${APPLE_CERTIFICATE_P12_BASE64}" | base64 --decode > "${p12}"
+          security import "${p12}" -k "${keychain}" -P "${APPLE_CERTIFICATE_PASSWORD}" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "${p12}"
+          # Thiếu dòng này thì codesign đứng chờ một hộp thoại UI mà không runner nào trả lời được.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "${keychain_password}" "${keychain}" > /dev/null
+
+          scripts/package-release.sh
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: slopshot-${{ steps.version.outputs.version }}-universal
+          path: |
+            dist/*.dmg
+            dist/SHA256SUMS
+          retention-days: 7
+
+  # ── publish ───────────────────────────────────────────────────────────────────────────────
+  publish:
+    name: GitHub Release
+    needs: package
+    if: ${{ !inputs.dry-run }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # Checkout vì đúng MỘT file: CHANGELOG.md, nơi chứa ghi chú mà job này đăng. Phải đứng
+      # trước download-artifact — checkout dọn sạch thư mục mà artifact rơi vào.
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: slopshot-${{ needs.package.outputs.version }}-universal
+          path: dist
+
+      - name: Tạo hoặc cập nhật release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.package.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          # NỘI DUNG RELEASE LÀ ĐOẠN CHANGELOG, KHÔNG GÌ KHÁC. Hướng dẫn cài, yêu cầu hệ thống,
+          # chữ ký, checksum — bốn mục đó giống hệt nhau ở mọi release, tức là lặp lại từ bản thứ
+          # hai trở đi, và mỗi mục đã có chỗ ở tự cập nhật được rồi:
+          #   Cài đặt / Yêu cầu → README.md
+          #   Chữ ký            → docs/release-pipeline.md
+          #   Checksum          → chính file SHA256SUMS đính kèm release này
+          # Một ghi chú release trả lời đúng một câu hỏi — có gì đổi — và những mục không trả lời
+          # câu đó đẩy phần trả lời nó ra khỏi màn hình đầu tiên.
+          #
+          # Viết vào RUNNER_TEMP chứ không vào checkout: một file `changelog.md` nháp nằm cạnh
+          # `CHANGELOG.md` của repo chỉ cách một filesystem không phân biệt hoa thường là redirect
+          # sẽ cắt trắng đúng cái file job này cần đọc.
+          notes="${RUNNER_TEMP}/release-notes.md"
+          scripts/changelog-section.sh "${VERSION}" > "${notes}"
+
+          # Chạy lại một release (tag lại, retry job) không được fail vì release đã tồn tại — và
+          # phải LÀM MỚI ghi chú, chứ không để nguyên nội dung của lần chạy đầu.
+          if gh release view "v${VERSION}" --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
+            gh release edit "v${VERSION}" --repo "${GITHUB_REPOSITORY}" --notes-file "${notes}"
+            gh release upload "v${VERSION}" dist/* --repo "${GITHUB_REPOSITORY}" --clobber
+          else
+            gh release create "v${VERSION}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "SlopShot ${VERSION}" \
+              --notes-file "${notes}" \
+              dist/*
+          fi
+
+  # ── Homebrew tap ──────────────────────────────────────────────────────────────────────────
+  tap:
+    name: Bump aislopware/homebrew-tap
+    needs: [package, publish]
+    if: ${{ !inputs.dry-run }}
+    runs-on: ubuntu-latest
+    steps:
+      # TRƯỚC download-artifact: client vault resolve project từ `projectId` ở eas.json
+      # (docs/release-pipeline.md), nên nó cần repo nằm trong thư mục làm việc — thiếu thì
+      # `env pull` thoát mã 4 với "Project not linked" và không bao giờ tới được token.
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: slopshot-${{ needs.package.outputs.version }}-universal
+          path: dist
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Kéo token tap từ vault và push bump
+        env:
+          BETTER_UPDATE_ROBOT: ${{ secrets.BETTER_UPDATE_ROBOT }}
+          VERSION: ${{ needs.package.outputs.version }}
+        run: |
+          set -euo pipefail
+          umask 077
+
+          bun add -g @better-update/cli@0.73.2
+
+          # Cùng một hình pull-mask-source như job package. `env get` render bảng cho người đọc;
+          # chỉ `env pull --stdout` mới ra các dòng `export KEY='value'` máy đọc được.
+          vault="${RUNNER_TEMP}/vault.sh"
+          better-update env pull --environment production --stdout > "${vault}"
+          while IFS= read -r line; do
+            case "${line}" in export\ *) ;; *) continue ;; esac
+            value="${line#*=}"
+            value="${value#\'}"
+            value="${value%\'}"
+            [ -n "${value}" ] && echo "::add-mask::${value}"
+          done < "${vault}"
+          # shellcheck disable=SC1090
+          . "${vault}"
+          rm -f "${vault}"
+          token="${HOMEBREW_TAP_TOKEN:?HOMEBREW_TAP_TOKEN không có trong vault better-update}"
+
+          dmg_sha="$(awk '/\.dmg$/ {print $1}' dist/SHA256SUMS)"
+          [ -n "${dmg_sha}" ] || { echo "::error::không đọc được sha256 của DMG từ dist/SHA256SUMS"; exit 1; }
+
+          git clone --depth 1 "https://x-access-token:${token}@github.com/aislopware/homebrew-tap.git" tap
+          cd tap
+          sed -i -E "s/^  version \".*\"/  version \"${VERSION}\"/; s/^  sha256 \".*\"/  sha256 \"${dmg_sha}\"/" Casks/slopshot.rb
+          git config user.name "slopshot-release"
+          git config user.email "release@slopshot.invalid"
+          # Cắt lại cùng một version (retry job) thì file không đổi và `git commit` fail vì rỗng —
+          # đó là no-op đúng, không phải lỗi.
+          if git diff --quiet; then
+            echo "Casks/slopshot.rb đã ở ${VERSION} với đúng sha256 — không có gì để push"
+          else
+            git commit -am "slopshot ${VERSION}"
+            git push
+          fi

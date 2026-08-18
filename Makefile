@@ -35,4 +35,40 @@ install: build
 	@echo "   Lần đầu nhớ cấp lại Screen Recording + Accessibility cho bản trong /Applications."
 
 clean:
-	rm -rf $(BUILD) $(APP).xcodeproj
+	rm -rf $(BUILD) $(APP).xcodeproj dist .work
+
+# ── Hook ───────────────────────────────────────────────────────────────────
+# Cài hook git. Cái quan trọng nhất là commit-msg: tiêu đề commit là ĐẦU VÀO của
+# release (version và CHANGELOG đều sinh ra từ nó), nên nó bị siết ngay lúc viết.
+.PHONY: hooks
+
+hooks:
+	@command -v prek >/dev/null 2>&1 && prek install \
+		|| { command -v pre-commit >/dev/null 2>&1 && pre-commit install --install-hooks \
+		|| { echo "❌ Chưa có prek. Cài: brew install prek"; exit 1; }; }
+
+# ── Release ────────────────────────────────────────────────────────────────
+# Bốn lệnh trên là "chạy ở máy mình"; mấy lệnh dưới là "ship cho người khác":
+# ký bằng Developer ID của WEEBUILD, notarize qua Apple, ra DMG cho Homebrew.
+# Toàn bộ quy trình: docs/release-pipeline.md
+.PHONY: release release-preview package version
+
+# Cắt release: quyết version từ commit log + render CHANGELOG + ghi ba chỗ + commit + tag.
+# KHÔNG push. Không truyền VERSION thì git-cliff tự tính từ các commit sau tag gần nhất.
+release:
+	bash scripts/cut-release.sh $(VERSION)
+
+# Xem trước version sắp ra và nội dung release, không ghi gì cả.
+release-preview:
+	bash scripts/cut-release.sh --dry-run $(VERSION)
+
+# Chỉ ghi version, không commit/tag. Dùng khi muốn sửa thêm gì đó trước khi cắt.
+version:
+	bash scripts/bump-version.sh $(VERSION)
+
+# Build + ký + notarize + đóng DMG vào dist/. CI chạy đúng script này.
+# Cần Developer ID trong keychain và thông tin notarytool (xem header của script).
+# Thử khô, chỉ ký không nộp Apple: make package VERSION=0.1.0 SKIP_NOTARIZE=1
+package:
+	SLOPSHOT_VERSION=$(VERSION) SLOPSHOT_SKIP_NOTARIZE=$(or $(SKIP_NOTARIZE),0) \
+		bash scripts/package-release.sh

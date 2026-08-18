@@ -1,0 +1,119 @@
+# git-cliff — sinh CHANGELOG.md từ commit log, và lấy luôn số version kế tiếp từ chính
+# nguồn đó. Một quy ước duy nhất trên tiêu đề commit, đọc hai lần: một lần để quy
+# feat/fix/breaking → minor/patch/major, một lần để render ghi chú mà GitHub Release đăng.
+#
+#   git-cliff --bumped-version        # semver kế tiếp, tính từ các commit sau tag gần nhất
+#   scripts/render-changelog.sh       # viết lại toàn bộ CHANGELOG.md
+#   scripts/cut-release.sh            # cả hai, cộng bump + commit + tag
+#
+# `scripts/changelog-section.sh <version>` cắt ra đúng một release trong file đã render;
+# job publish lấy lát cắt đó làm nội dung GitHub Release.
+
+[changelog]
+header = """
+# Changelog
+
+Sinh từ commit log bằng [git-cliff](https://git-cliff.org). Mục nào nằm ở đâu là do
+loại (type) của commit quyết định — tức quyết định lúc VIẾT commit, không phải lúc cắt
+release. Quy ước được `scripts/check-commit-msg.sh` chặn ngay ở hook commit-msg.
+"""
+
+# Macro khai báo TRƯỚC phần thân, không phải sau. Một `{%- macro` đặt cuối sẽ nuốt khoảng
+# trắng đứng trước nó, ăn mất dòng trống cuối thân release và dán bullet cuối của release
+# này vào thẳng dòng `##` của release kế. `trim = false` cũng vì lý do đó. Khoảng trắng ở
+# đây là có tải trọng, nên viết hẳn ra thay vì phó mặc cho công tắc toàn cục.
+#
+# `previous.version` có ở mọi release trừ cái đầu tiên — đó là thứ phân biệt một tiêu đề
+# release mang link so sánh với cái không có gì để so.
+body = """
+{%- macro commit_url(id) -%}
+{{ remote.link | default(value="https://github.com/aislopware/slop-shot") }}/commit/{{ id }}
+{%- endmacro -%}
+{%- macro compare_url(previous, version) -%}
+{% set repo = remote.link | default(value="https://github.com/aislopware/slop-shot") -%}
+{% if previous.version -%}
+{{ repo }}/compare/{{ previous.version }}...{{ version }}
+{%- else -%}
+{{ repo }}/releases/tag/{{ version }}
+{%- endif -%}
+{%- endmacro -%}
+{% if version -%}
+## [{{ version | trim_start_matches(pat="v") }}]({{ self::compare_url(previous=previous, version=version) }}) — {{ timestamp | date(format="%Y-%m-%d") }}
+{% else -%}
+## Unreleased
+{% endif %}
+{%- for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim | upper_first }}
+{% for commit in commits %}
+- {{ commit.message | split(pat="\n") | first | upper_first }} ([`{{ commit.id | truncate(length=7, end="") }}`]({{ self::commit_url(id=commit.id) }}))
+{%- endfor %}
+{% endfor %}
+"""
+
+footer = ""
+trim = false
+
+# KHÔNG đặt `postprocessors` để dọn dòng trống cuối file. Chúng chạy trên TỪNG RELEASE chứ
+# không trên văn bản hoàn chỉnh: `{ pattern = '\n+$', replace = "\n" }` sẽ bóc dấu ngăn cách
+# khỏi mọi thân release và dán mọi tiêu đề `## [x.y.z]` vào bullet cuối của release trước,
+# trong khi cuối-file thật thì vẫn nguyên. Dòng trắng cuối file do
+# `scripts/render-changelog.sh` chuẩn hoá — nó là thứ duy nhất được phép ghi file này.
+
+[git]
+conventional_commits = true
+
+# KHÁC slop-desk: bên đó `filter_unconventional = true`, tiêu đề sai quy ước bị VỨT chứ
+# không render thô. Ở đây không làm thế được — cả 20 commit trước khi hook ra đời đều là
+# văn xuôi ("Region select: freeze the screen…"), bật lọc là v0.1.0 render ra rỗng, mà một
+# release rỗng thì git-cliff xoá luôn cả tiêu đề, kéo theo `changelog-section.sh 0.1.0`
+# fail và `cut-release.sh` chết giữa chừng. Để `false` thì lịch sử cũ rơi vào "Other
+# changes" — đúng những gì đã ship, mà đằng nào cũng chỉ xảy ra một lần: từ commit này trở
+# đi hook chặn không cho tiêu đề nào ra ngoài quy ước nữa.
+filter_unconventional = false
+filter_commits = true
+
+split_commits = false
+protect_breaking_commits = true
+
+tag_pattern = "v[0-9]*"
+topo_order = false
+sort_commits = "oldest"
+
+commit_preprocessors = [
+  # Bỏ đuôi "(#123)" mà squash-merge tự thêm — dòng render đã tự mang link commit, hai link
+  # tới cùng một thay đổi đọc ra thành hai thay đổi.
+  { pattern = ' \(#[0-9]+\)$', replace = "" },
+]
+
+# Thứ tự ở đây LÀ thứ tự render: git-cliff sắp nhóm theo tiền tố số, còn template thì bóc
+# tiền tố đó đi. Cái bắt-tất ở cuối để một type không ai lường trước rơi vào "Other changes"
+# thay vì biến mất.
+#
+# GẦN NHƯ KHÔNG SKIP GÌ, và đó là chủ ý. git-cliff xoá nguyên một release nếu nó còn zero
+# commit — xoá cả tiêu đề — nên `skip` mấy type dọn dẹp là xoá luôn cả release khỏi file:
+# một bản chỉ có đúng một commit `ci` và một commit `chore(release)` mà giấu cả hai thì
+# chính release ấy biến mất, rồi `changelog-section.sh` fail trên một version đã thật sự
+# ship. Nhấn mạnh bằng THỨ TỰ thay vì bằng ẩn: cái người ta cài app vì nó nằm trên, phần
+# đường ống nằm dưới.
+commit_parsers = [
+  { message = "^chore\\(release\\)", skip = true },
+  { message = "^[Mm]erge (branch|remote-tracking|pull request)", skip = true },
+
+  { message = "^feat", group = "<!-- 0 -->Features" },
+  { message = "^fix", group = "<!-- 1 -->Bug fixes" },
+  { message = "^perf", group = "<!-- 2 -->Performance" },
+  { message = "^refactor", group = "<!-- 3 -->Refactoring" },
+  { message = "^revert", group = "<!-- 4 -->Reverts" },
+  { message = "^docs", group = "<!-- 5 -->Documentation" },
+  { message = "^test", group = "<!-- 6 -->Tests" },
+  { message = "^(build|ci|chore|style)", group = "<!-- 7 -->Tooling" },
+
+  { message = ".*", group = "<!-- 8 -->Other changes" },
+]
+
+[bump]
+# feat → minor, fix/perf/refactor → patch, `!` hoặc BREAKING CHANGE → major, và dưới 1.0 thì
+# breaking chỉ là minor. Đây đúng là mặc định của git-cliff, ghim lại ở đây để một mặc định
+# đổi ở thượng nguồn không âm thầm đánh lại số một bản release.
+features_always_bump_minor = true
+breaking_always_bump_major = false

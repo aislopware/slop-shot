@@ -1,0 +1,72 @@
+# Git hook, chạy bằng prek (https://github.com/j178/prek) — bản chạy pre-commit viết bằng
+# Rust, thay thẳng được cho `pre-commit` cổ điển.
+#
+# Cài (chạy lại bao nhiêu lần cũng được):   prek install     # hoặc: make hooks
+# Chạy tay:                                 prek run --all-files
+# Bỏ qua một lần:                           git commit --no-verify
+#
+# Mọi hook local đều `language: system`: không có môi trường nào phải dựng, nên không có
+# cache nào để trượt — nó gọi thẳng công cụ đã cài sẵn trên máy. Repo này không có
+# swiftlint/swiftformat nên phần Swift để trống; cái thật sự gác cổng ở đây là hook
+# commit-msg, vì tiêu đề commit là ĐẦU VÀO của release chứ không phải văn xuôi.
+
+minimum_pre_commit_version: "3.5.0"
+default_install_hook_types: [pre-commit, commit-msg]
+default_stages: [pre-commit]
+fail_fast: false
+
+repos:
+  # Vệ sinh chung (prek chạy native, không cần môi trường Python).
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        stages: [pre-commit]
+        # .md để yên: hai dấu cách cuối dòng trong Markdown là một cú xuống dòng.
+        exclude: '\.md$'
+      - id: end-of-file-fixer
+        stages: [pre-commit]
+      - id: check-yaml
+        stages: [pre-commit]
+      - id: check-toml
+        stages: [pre-commit]
+      - id: check-merge-conflict
+        stages: [pre-commit]
+      - id: mixed-line-ending
+        stages: [pre-commit]
+        args: [--fix=lf]
+      - id: check-added-large-files
+        stages: [pre-commit]
+        # 1024 vừa đủ cho icon 1024px (274 KB) mà vẫn bắt được một cái ảnh chụp màn hình hay
+        # một bộ sticker lỡ tay lọt vào cây — sticker giờ tải từ R2, không nằm trong repo.
+        args: [--maxkb=1024]
+
+  - repo: local
+    hooks:
+      # ── Shell ──────────────────────────────────────────────────────────────────────
+      # Toàn bộ đường ống release là bash. Một cái typo trong scripts/package-release.sh chỉ
+      # lộ ra sau ~15 phút build đã ký, nên nó được soi ngay ở commit.
+      - id: shfmt
+        name: shfmt (tự sửa)
+        entry: shfmt -i 2 -ci -sr -w
+        language: system
+        files: '\.sh$'
+
+      - id: shellcheck
+        name: shellcheck
+        entry: shellcheck
+        language: system
+        files: '\.sh$'
+
+      # ── Commit message (stage commit-msg) ──────────────────────────────────────────
+      # `cliff.toml` đọc type để xếp commit vào mục nào của CHANGELOG.md, và
+      # `git-cliff --bumped-version` đọc nó để tính version kế tiếp. Siết ở đây chính là thứ
+      # cho phép sinh cả hai thay vì bảo trì tay. `always_run` và KHÔNG có `files:`: stage
+      # commit-msg đưa cho hook cái FILE message chứ không phải danh sách path đã stage, nên
+      # một pattern `files:` sẽ không khớp gì và âm thầm bỏ qua mọi commit.
+      - id: commit-msg-conventional
+        name: conventional commit subject
+        entry: bash scripts/check-commit-msg.sh
+        language: system
+        stages: [commit-msg]
+        always_run: true
