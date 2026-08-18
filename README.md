@@ -31,6 +31,19 @@
 - **Video editor** — Quick Look (in-app player) plus a full editor built around a lane-based timeline: **trim** handles on a filmstrip, **cut** stretches out of the middle, **speed** ramps (0.25×–10×), **freeze** frames, eased **zoom**, **blur/pixelate censor** regions, and **text** captions. Press a tool and the effect drops in at the playhead — drag the pill along its lane to move it, its edges to stretch it, and the box straight on the video to aim it. Two effects on the same lane can never overlap: they stop against each other, or slide to the nearest gap. **Auto Zoom** turns the clicks you made while recording into zoom-ins in one press. Preview and export share one Core Image composition, so what you see is exactly what lands in the file. Exports MOV / MP4 / GIF with separate Quality, Resolution and FPS controls (a plain trim still takes the lossless passthrough path).
 - **Capture history**, **settings**, and configurable **global hotkeys**.
 
+## Install
+
+```bash
+brew trust aislopware/tap                    # Homebrew 6+ gates third-party taps
+brew install --cask aislopware/tap/slopshot
+```
+
+Universal (Apple Silicon + Intel), macOS 15+. The DMG is signed with a Developer ID and
+notarized by Apple, and the ticket is stapled to the `.app` itself — so the first launch
+works offline, with no right-click-Open dance. Or grab the DMG from
+[Releases](https://github.com/aislopware/slop-shot/releases) and check it against the
+`SHA256SUMS` attached to the same release.
+
 ## Tech stack
 
 Swift · SwiftUI · AppKit · ScreenCaptureKit · AVFoundation / AVKit · Vision (OCR) · CoreGraphics/CoreText · [XcodeGen](https://github.com/yonaskolb/XcodeGen)
@@ -59,8 +72,30 @@ Optional (to keep permissions stable across rebuilds): create a self-signed *Cod
 certificate named `SlopShot Dev` in **Keychain Access** → Certificate Assistant →
 *Create a Certificate…*.
 
-The app is **not** sandboxed and is **not** notarized — it's intended for personal local use.
-A locally-built app has no quarantine flag, so Gatekeeper lets it run without warnings.
+The app is **not** sandboxed. A locally-built app has no quarantine flag, so Gatekeeper lets
+it run without warnings — the Developer ID signing and notarization above only apply to the
+DMGs cut by the release pipeline.
+
+## Contributing & releases
+
+Commit subjects are **conventional commits**, enforced by a `commit-msg` hook — the version
+number and the whole of `CHANGELOG.md` are generated from them, so a subject outside the
+grammar contributes to neither:
+
+```bash
+brew install prek git-cliff
+make hooks       # installs the pre-commit + commit-msg hooks
+```
+
+```
+feat(stickers): download packs on demand instead of bundling them
+fix(timeline): keep two effects on one lane from overlapping
+```
+
+Cutting a release is `make release-preview` → `make release` → push the tag; CI then builds
+universal, signs, notarizes, publishes the GitHub Release and bumps the Homebrew cask. The
+whole thing — including how the signing material is fetched without ever touching a log —
+is written up in [docs/release-pipeline.md](docs/release-pipeline.md).
 
 ## App icon
 
