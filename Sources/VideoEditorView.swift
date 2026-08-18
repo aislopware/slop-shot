@@ -110,9 +110,10 @@ struct VideoEditorView: View {
     }
 
     private func toolButton(_ kind: VideoEffectKind) -> some View {
-        let on = store.activeTool == kind
-        return Button {
-            store.activeTool = on ? nil : kind
+        // Bấm là có ngay một đoạn tại playhead, chọn sẵn cho inspector mở luôn.
+        // Nút không có trạng thái bật/tắt: một cú bấm ra đúng một đoạn.
+        Button {
+            store.drop(kind)
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: kind.icon).font(.system(size: 12, weight: .medium))
@@ -123,9 +124,7 @@ struct VideoEditorView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(on ? .white : Color(white: 0.80))
-        .background(RoundedRectangle(cornerRadius: 7)
-            .fill(on ? Color(nsColor: kind.tint) : .clear))
+        .foregroundStyle(Color(white: 0.86))
         .help(hint(for: kind))
     }
 
@@ -166,12 +165,12 @@ struct VideoEditorView: View {
 
     private func hint(for kind: VideoEffectKind) -> String {
         switch kind {
-        case .cut:    return "Drag on the Cut lane to remove a stretch of the clip"
-        case .speed:  return "Drag on the Speed lane to slow down or speed up a stretch"
-        case .freeze: return "Click on the Speed lane to hold a frame still"
-        case .zoom:   return "Drag on the Zoom lane, then draw the region on the video"
-        case .censor: return "Drag on the Censor lane, then draw what to blur out"
-        case .text:   return "Drag on the Text lane, then place the caption on the video"
+        case .cut:    return "Drop a Cut at the playhead — the clip skips that stretch"
+        case .speed:  return "Drop a Speed ramp at the playhead — slow it down or speed it up"
+        case .freeze: return "Drop a Freeze at the playhead — hold that frame still"
+        case .zoom:   return "Drop a Zoom at the playhead, then draw the region on the video"
+        case .censor: return "Drop a Censor box at the playhead, then draw what to blur out"
+        case .text:   return "Drop a caption at the playhead, then place it on the video"
         }
     }
 
@@ -225,9 +224,7 @@ struct VideoEditorView: View {
 
             Spacer()
 
-            Text(store.activeTool == nil
-                 ? "Pick a tool, then drag on its lane below"
-                 : "Drag on the \(store.activeTool!.label) lane to place it")
+            Text("A tool drops in at the playhead — drag it on its lane to place it")
                 .font(.caption)
                 .foregroundStyle(Color(white: 0.5))
         }
@@ -528,9 +525,7 @@ struct VideoEditorView: View {
         case 51, 117:                                   // ⌫ / ⌦
             guard store.selectedID != nil else { return false }
             store.deleteSelected()
-        case 53:                                        // Esc
-            if store.activeTool != nil { store.activeTool = nil }
-            else { store.selectedID = nil }
+        case 53: store.selectedID = nil                 // Esc
         default: return false
         }
         return true

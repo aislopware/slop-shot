@@ -17,8 +17,12 @@ import SwiftUI
 // ứng nằm đúng chỗ đó của bản quay, kể cả khi đã cắt bớt đoạn khác. Playhead
 // do store quy đổi từ đồng hồ player (comp time) sang trục này.
 //
-// Chọn công cụ trên thanh trên → kéo trong vùng lane để TẠO đoạn mới.
-// Không chọn công cụ → kéo pill để dời, kéo mép để co giãn, click nền để tua.
+// Bấm công cụ trên thanh trên → một đoạn rơi ngay xuống lane của nó tại
+// playhead. Timeline này KHÔNG tạo gì cả: kéo pill để dời, kéo mép để co giãn,
+// click nền để tua. Một hành động một chỗ, khỏi bấm nhầm ra hai đoạn.
+//
+// Hai đoạn CÙNG LANE không bao giờ đè nhau: mọi thao tác đều xin store kẹp lại
+// vào chỗ trống trước (fit / clampedStart / resizeBounds).
 //
 // Toạ độ SwiftUI gốc TRÊN-TRÁI nên khớp luôn với cách vẽ ở đây (y tăng xuống).
 // ─────────────────────────────────────────────────────────────────────────
@@ -41,14 +45,11 @@ struct VideoTimeline: View {
     private enum Mode {
         case idle
         case trimStart, trimEnd, scrub
-        case create(VideoEffectKind, anchor: Double)
         case move(UUID, grab: Double)
         case resizeLeft(UUID), resizeRight(UUID)
     }
     @State private var mode: Mode = .idle
     @State private var didSnapshot = false
-    /// Vùng đang kéo để tạo đoạn mới (vẽ mờ cho thấy trước).
-    @State private var ghost: (kind: VideoEffectKind, a: Double, b: Double)?
 
     var body: some View {
         GeometryReader { geo in
@@ -59,7 +60,6 @@ struct VideoTimeline: View {
                     filmstrip(w)
                     lanes(w)
                     segments(w)
-                    ghostPill(w)
                     playhead(w)
                 }
             }
@@ -67,13 +67,8 @@ struct VideoTimeline: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { v in onDrag(v, width: w) }
-                    .onEnded { v in onDrop(v, width: w) }
+                    .onEnded { _ in onDrop() }
             )
-            // Cầm công cụ thì con trỏ đổi thành chữ thập — biết là sắp vẽ ra đoạn.
-            .onHover { inside in
-                if inside, store.activeTool != nil { NSCursor.crosshair.set() }
-                else { NSCursor.arrow.set() }
-            }
         }
         .frame(height: Self.height)
     }
@@ -157,10 +152,9 @@ struct VideoTimeline: View {
 
     private func lanes(_ w: CGFloat) -> some View {
         ForEach(0..<VideoEffectKind.laneCount, id: \.self) { lane in
-            let lit = store.activeTool?.lane == lane
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 4)
-                    .fill(.white.opacity(lit ? 0.10 : 0.04))
+                    .fill(.white.opacity(0.04))
                     .frame(width: w, height: laneH)
                     .offset(x: inset)
                 Text(laneName(lane))
@@ -233,22 +227,6 @@ struct VideoTimeline: View {
         Button("Delete \(seg.kind.label)", role: .destructive) { store.delete(seg.id) }
     }
 
-    /// Vệt mờ trong lúc kéo tạo đoạn mới.
-    @ViewBuilder
-    private func ghostPill(_ w: CGFloat) -> some View {
-        if let g = ghost {
-            let a = x(min(g.a, g.b), w), b = x(max(g.a, g.b), w)
-            RoundedRectangle(cornerRadius: 4)
-                .fill(Color(nsColor: g.kind.tint).opacity(0.35))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 4)
-                        .stroke(Color(nsColor: g.kind.tint), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                }
-                .frame(width: max(b - a, 2), height: laneH)
-                .offset(x: a, y: laneTop(g.kind.lane))
-        }
-    }
-
     // MARK: - Playhead
 
     private func playhead(_ w: CGFloat) -> some View {
@@ -291,21 +269,7 @@ struct VideoTimeline: View {
             return
         }
 
-        // 2) Vùng lane: đang cầm công cụ → tạo mới.
-        if let tool = store.activeTool {
-            let t = time(p.x, w)
-            if tool == .freeze {
-                snapshotOnce()
-                store.addSegment(kind: .freeze, start: t, end: t + 1.0)
-                mode = .idle
-            } else {
-                mode = .create(tool, anchor: t)
-                ghost = (tool, t, t)
-            }
-            return
-        }
-
-        // 3) Không cầm công cụ → chọn / dời / co giãn pill.
+        // 2) Vùng lane: chọn / dời / co giãn pill.
         if let hit = segment(at: p, width: w) {
             let (px, pw) = pill(hit, w)
             store.selectedID = hit.id
@@ -331,48 +295,37 @@ struct VideoTimeline: View {
             store.seek(source: store.trimEnd)
         case .scrub:
             store.seek(source: t)
-        case .create(let kind, let anchor):
-            ghost = (kind, anchor, t)
         case .move(let id, let grab):
             guard let seg = store.segments.first(where: { $0.id == id }) else { return }
             snapshotOnce()
             let len = seg.duration
-            seg.start = min(max(t - grab, 0), store.duration - len)
+            seg.start = store.clampedStart(seg, desired: t - grab)
             seg.end = seg.start + len
             store.touch(live: true)
         case .resizeLeft(let id):
             guard let seg = store.segments.first(where: { $0.id == id }) else { return }
             snapshotOnce()
-            seg.start = min(max(t, 0), seg.end - VideoSegment.minDuration(seg.kind))
+            let bound = store.resizeBounds(seg)
+            seg.start = min(max(t, bound.lo), seg.end - VideoSegment.minDuration(seg.kind))
             store.touch(live: true)
         case .resizeRight(let id):
             guard let seg = store.segments.first(where: { $0.id == id }) else { return }
             snapshotOnce()
-            seg.end = max(min(t, store.duration), seg.start + VideoSegment.minDuration(seg.kind))
+            let bound = store.resizeBounds(seg)
+            seg.end = max(min(t, bound.hi), seg.start + VideoSegment.minDuration(seg.kind))
             store.touch(live: true)
         case .idle:
             break
         }
     }
 
-    private func onDrop(_ v: DragGesture.Value, width w: CGFloat) {
+    private func onDrop() {
         switch mode {
-        case .create(let kind, let anchor):
-            let t = time(v.location.x, w)
-            let a = min(anchor, t), b = max(anchor, t)
-            let minLen = VideoSegment.minDuration(kind)
-            // Click nhanh (không kéo) → tạo đoạn mặc định 2 giây.
-            let (start, end) = (b - a) < minLen ? (a, min(a + 2, store.duration)) : (a, b)
-            if end > start {
-                snapshotOnce()
-                store.addSegment(kind: kind, start: start, end: end)
-            }
         case .trimStart, .trimEnd, .move, .resizeLeft, .resizeRight:
             store.touch()
         case .scrub, .idle:
             break
         }
-        ghost = nil
         mode = .idle
         didSnapshot = false
     }

@@ -36,7 +36,6 @@ final class VideoEditStore: ObservableObject {
     @Published var trimEnd: Double = 0
     @Published private(set) var segments: [VideoSegment] = []
     @Published var selectedID: UUID?
-    @Published var activeTool: VideoEffectKind?
     @Published private(set) var playheadSource: Double = 0
     @Published private(set) var compTime: Double = 0
     @Published private(set) var compDuration: Double = 0
@@ -209,18 +208,105 @@ final class VideoEditStore: ObservableObject {
         trimEnd = snap.trimEnd
         segments = snap.segments
         selectedID = nil
-        activeTool = nil
         touch()
     }
 
-    func addSegment(kind: VideoEffectKind, start: Double, end: Double) {
-        let seg = VideoSegment(kind: kind, start: start, end: end)
+    @discardableResult
+    func addSegment(kind: VideoEffectKind, start: Double, end: Double) -> Bool {
+        guard let (s, e) = fit(kind, start: start, end: end) else { NSSound.beep(); return false }
+        let seg = VideoSegment(kind: kind, start: s, end: e)
         if kind == .text { seg.rect = CGRect(x: 0.15, y: 0.72, width: 0.7, height: 0.14) }
         segments.append(seg)
         selectedID = seg.id
-        activeTool = nil               // tạo xong nhả công cụ ra
-        seek(source: (start + end) / 2)
+        seek(source: (s + e) / 2)
         touch()
+        return true
+    }
+
+    /// Bấm nút công cụ = có ngay một đoạn tại playhead. Không còn chế độ "đang
+    /// cầm công cụ": bấm xong là quay lại chọn / dời / co giãn như thường, nên
+    /// click xuống lane không bao giờ lỡ đẻ thêm cái thứ hai.
+    func drop(_ kind: VideoEffectKind) {
+        let len = kind == .freeze ? 1.0 : 2.0
+        let start = min(max(playheadSource, trimStart), trimEnd)
+        // Chỉ ghi undo khi thật sự có chỗ nhét — không thì bấm vào lane đã kín
+        // lại đẻ ra một bước undo rỗng.
+        if fit(kind, start: start, end: start + len) != nil { pushUndo() }
+        addSegment(kind: kind, start: start, end: start + len)
+    }
+
+    // MARK: - Không cho hai đoạn cùng lane đè nhau
+
+    // Xét theo LANE chứ không theo kind, vì lane 1 chứa cả Speed lẫn Freeze —
+    // tua nhanh một đoạn đang đứng hình thì không ra nghĩa gì. Mọi đường tạo /
+    // dời / co giãn đều đi qua mấy hàm dưới, nên không còn lối nào lách được.
+
+    private func laneMates(_ lane: Int, excluding id: UUID?) -> [VideoSegment] {
+        segments.filter { $0.kind.lane == lane && $0.id != id }
+                .sorted { $0.start < $1.start }
+    }
+
+    /// Những khoảng còn trống trên một lane.
+    private func gaps(lane: Int, excluding id: UUID?) -> [(lo: Double, hi: Double)] {
+        var out: [(lo: Double, hi: Double)] = []
+        var cursor = 0.0
+        for m in laneMates(lane, excluding: id) {
+            if m.start > cursor { out.append((cursor, m.start)) }
+            cursor = max(cursor, m.end)
+        }
+        if cursor < duration { out.append((cursor, duration)) }
+        return out
+    }
+
+    /// Khoảng trống GẦN `t` nhất mà còn chứa nổi `minLen` giây. Gần chứ không
+    /// phải rộng nhất: thả hụt vào chỗ đã kín thì nhảy sang ngay bên cạnh vẫn
+    /// hiểu được, chứ văng về đầu clip thì không.
+    private func nearestGap(lane: Int, to t: Double, minLen: Double,
+                            excluding id: UUID?) -> (lo: Double, hi: Double)? {
+        gaps(lane: lane, excluding: id)
+            .filter { $0.hi - $0.lo >= minLen }
+            .min { distance($0, t) < distance($1, t) }
+    }
+
+    private func distance(_ g: (lo: Double, hi: Double), _ t: Double) -> Double {
+        t < g.lo ? g.lo - t : (t > g.hi ? t - g.hi : 0)
+    }
+
+    /// Kẹp một đoạn sắp tạo vào chỗ trống. nil = lane kín đặc, không nhét nổi.
+    private func fit(_ kind: VideoEffectKind, start: Double, end: Double) -> (Double, Double)? {
+        let a = min(start, end), b = max(start, end)
+        let minLen = VideoSegment.minDuration(kind)
+        let want = max(b - a, minLen)
+        // Tìm chỗ chứa ĐỦ độ dài muốn trước; hết mới hạ xuống chỗ chứa nổi mức
+        // tối thiểu. Ngược lại thì thả vào giữa một đoạn đã có sẽ ép ra một mẩu
+        // 0.2 giây nằm nép bên mép, chẳng ai định làm thế.
+        guard let g = nearestGap(lane: kind.lane, to: a, minLen: want, excluding: nil)
+                   ?? nearestGap(lane: kind.lane, to: a, minLen: minLen, excluding: nil)
+        else { return nil }
+        // Chỗ vừa bấm còn trống thì bắt đầu ĐÚNG ở đó, chỉ cắt cụt phần đuôi
+        // đụng hàng xóm. Phải dời hẳn sang khoảng khác mới căn lại cho vừa khít.
+        let s = (a >= g.lo && a <= g.hi - minLen)
+            ? a
+            : min(max(a, g.lo), g.hi - min(want, g.hi - g.lo))
+        return (s, min(s + want, g.hi))
+    }
+
+    /// Mốc bắt đầu hợp lệ gần `desired` nhất khi DỜI một đoạn. Chọn khoảng trống
+    /// theo tâm đoạn, nên kéo mạnh tay là nó nhảy hẳn sang bên kia hàng xóm chứ
+    /// không dính cứng vào mép.
+    func clampedStart(_ seg: VideoSegment, desired: Double) -> Double {
+        let len = seg.duration
+        let d = min(max(desired, 0), max(duration - len, 0))
+        guard let g = nearestGap(lane: seg.kind.lane, to: d + len / 2,
+                                 minLen: len, excluding: seg.id) else { return seg.start }
+        return min(max(d, g.lo), g.hi - len)
+    }
+
+    /// Hai mép xa nhất được phép khi CO GIÃN — chạm hàng xóm là dừng.
+    func resizeBounds(_ seg: VideoSegment) -> (lo: Double, hi: Double) {
+        let mates = laneMates(seg.kind.lane, excluding: seg.id)
+        return (mates.filter { $0.end <= seg.start + 0.001 }.map(\.end).max() ?? 0,
+                mates.filter { $0.start >= seg.end - 0.001 }.map(\.start).min() ?? duration)
     }
 
     func delete(_ id: UUID) {
