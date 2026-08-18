@@ -85,9 +85,11 @@ jobs:
           set -euo pipefail
           umask 077
 
-          # Ghim version, không dùng @latest: minimumReleaseAge của bun giữ lại các bản publish
-          # trong 24h, nên @latest có thể âm thầm rơi về một build cũ hơn mức server chấp nhận.
-          bun add -g @better-update/cli@0.73.2
+          # @latest, và --minimum-release-age=0 là phần bắt buộc đi kèm chứ không phải trang trí:
+          # mặc định bun giữ lại các bản vừa publish trong 24h, nên @latest có thể âm thầm rơi về
+          # một build cũ hơn mức server chấp nhận — đúng lý do trước đây phải ghim cứng. Tắt hẳn
+          # cái giữ đó thì @latest mới thật sự là latest.
+          bun add -g @better-update/cli@latest --minimum-release-age=0
           vault="${RUNNER_TEMP}/vault.sh"
           better-update env pull --environment production --stdout > "${vault}"
 
@@ -222,7 +224,7 @@ jobs:
           set -euo pipefail
           umask 077
 
-          bun add -g @better-update/cli@0.73.2
+          bun add -g @better-update/cli@latest --minimum-release-age=0
 
           # Cùng một hình pull-mask-source như job package. `env get` render bảng cho người đọc;
           # chỉ `env pull --stdout` mới ra các dòng `export KEY='value'` máy đọc được.
