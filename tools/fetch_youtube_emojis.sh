@@ -26,12 +26,16 @@ NAME="${1:-YouTube Live Chat}"
 DEST="$HOME/Library/Application Support/SlopShot/Stickers/$NAME"
 
 mkdir -p "$DEST"
-tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
 curl -sL --compressed "$GIST_URL" -o "$tmp"
-[ -s "$tmp" ] || { echo "Không tải được danh sách emoji."; exit 1; }
+[ -s "$tmp" ] || {
+  echo "Không tải được danh sách emoji."
+  exit 1
+}
 
 # CSV: "Emoji label","Src" — bỏ dòng tiêu đề, tách nhãn (bỏ dấu :) và URL gốc.
-python3 - "$tmp" "$DEST" "$SIZE" <<'PY'
+python3 - "$tmp" "$DEST" "$SIZE" << 'PY'
 import csv, re, sys, subprocess, os
 from concurrent.futures import ThreadPoolExecutor
 src, dest, size = sys.argv[1], sys.argv[2], sys.argv[3]

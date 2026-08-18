@@ -30,41 +30,52 @@ set -euo pipefail
 
 PACK_IDS="${1:-}"
 PACK_NAME="${2:-Zalo $PACK_IDS}"
-[ -n "$PACK_IDS" ] || { echo "Dùng: $0 <packId[,packId…]> [tên bộ]"; exit 1; }
+[ -n "$PACK_IDS" ] || {
+  echo "Dùng: $0 <packId[,packId…]> [tên bộ]"
+  exit 1
+}
 
 SRC_ROOT="$HOME/Library/Application Support/ZaloData/media"
 DEST="$HOME/Library/Application Support/SlopShot/Stickers/$PACK_NAME"
 
 mkdir -p "$DEST"
-n=0; anim=0; missing=""
+n=0
+anim=0
+missing=""
 for pack_id in ${PACK_IDS//,/ }; do
-    # uid nằm giữa đường dẫn, dò ra thay vì bắt gõ tay.
-    pack_dir=$(find "$SRC_ROOT" -maxdepth 3 -type d -name "$pack_id" -path "*/sticker/*" 2>/dev/null | head -1)
-    [ -n "$pack_dir" ] || { missing="$missing $pack_id"; continue; }
+  # uid nằm giữa đường dẫn, dò ra thay vì bắt gõ tay.
+  pack_dir=$(find "$SRC_ROOT" -maxdepth 3 -type d -name "$pack_id" -path "*/sticker/*" 2> /dev/null | head -1)
+  [ -n "$pack_dir" ] || {
+    missing="$missing $pack_id"
+    continue
+  }
 
-    for sticker_dir in "$pack_dir"/*/; do
-        [ -d "$sticker_dir" ] || continue
-        sprite=""; square=""; any=""
-        for f in "$sticker_dir"*; do
-            [ -f "$f" ] || continue
-            w=$(sips -g pixelWidth  "$f" 2>/dev/null | tail -1 | awk '{print $2}')
-            h=$(sips -g pixelHeight "$f" 2>/dev/null | tail -1 | awk '{print $2}')
-            [ -n "$w" ] && [ -n "$h" ] && [ "$h" -gt 0 ] || continue
-            [ -z "$any" ] && any="$f"
-            # Sprite sheet: ngang chia hết cho cao và ≥3 lần (ngưỡng y hệt trong
-            # app, để không nhận nhầm ảnh banner ngang thành animation).
-            if [ "$w" -ge $((h * 3)) ] && [ $((w % h)) -eq 0 ]; then sprite="$f"
-            elif [ "$w" = "$h" ]; then square="$f"; fi
-        done
-        best="${sprite:-${square:-$any}}"
-        [ -n "$best" ] || continue
-        eid=$(basename "$sticker_dir")
-        # Bản động thay luôn bản tĩnh cùng eid đã nằm sẵn trong bộ (đuôi có thể khác).
-        [ -n "$sprite" ] && rm -f "$DEST/$eid".*
-        cp "$best" "$DEST/$eid.${best##*.}"
-        n=$((n + 1))
-        [ -n "$sprite" ] && anim=$((anim + 1))
+  for sticker_dir in "$pack_dir"/*/; do
+    [ -d "$sticker_dir" ] || continue
+    sprite=""
+    square=""
+    any=""
+    for f in "$sticker_dir"*; do
+      [ -f "$f" ] || continue
+      w=$(sips -g pixelWidth "$f" 2> /dev/null | tail -1 | awk '{print $2}')
+      h=$(sips -g pixelHeight "$f" 2> /dev/null | tail -1 | awk '{print $2}')
+      [ -n "$w" ] && [ -n "$h" ] && [ "$h" -gt 0 ] || continue
+      [ -z "$any" ] && any="$f"
+      # Sprite sheet: ngang chia hết cho cao và ≥3 lần (ngưỡng y hệt trong
+      # app, để không nhận nhầm ảnh banner ngang thành animation).
+      if [ "$w" -ge $((h * 3)) ] && [ $((w % h)) -eq 0 ]; then
+        sprite="$f"
+      elif [ "$w" = "$h" ]; then square="$f"; fi
     done
+    best="${sprite:-${square:-$any}}"
+    [ -n "$best" ] || continue
+    eid=$(basename "$sticker_dir")
+    # Bản động thay luôn bản tĩnh cùng eid đã nằm sẵn trong bộ (đuôi có thể khác).
+    [ -n "$sprite" ] && rm -f "$DEST/$eid".*
+    cp "$best" "$DEST/$eid.${best##*.}"
+    n=$((n + 1))
+    [ -n "$sprite" ] && anim=$((anim + 1))
+  done
 done
 
 echo "✅ $n sticker → $DEST  (trong đó $anim con động)"
