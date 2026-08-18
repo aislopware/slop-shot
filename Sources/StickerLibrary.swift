@@ -14,6 +14,9 @@ import UniformTypeIdentifiers
 //
 // Muốn thêm bộ mới: kéo cả thư mục ảnh vào (nút Import) hoặc copy tay vào đây.
 // Tên thư mục = tên bộ hiện trên UI, tên file = tooltip của từng sticker.
+//
+// Sticker ĐỘNG: file gif/apng/webp động, hoặc sprite sheet ngang (kiểu Zalo).
+// Xem FrameSequence trong AnimatedImage.swift.
 // ─────────────────────────────────────────────────────────────────────────
 struct Sticker: Identifiable, Hashable {
     let url: URL
@@ -35,19 +38,27 @@ final class StickerLibrary: ObservableObject {
     @Published private(set) var packs: [StickerPack] = []
 
     let root: URL
-    private var cache: [URL: NSImage] = [:]   // khỏi đọc lại đĩa mỗi lần cuộn lưới
+    private var thumbs: [URL: NSImage] = [:]  // khỏi đọc lại đĩa mỗi lần cuộn lưới
+    private var animated: [URL: Bool] = [:]   // có nhiều frame không (không giải nén frame nào)
 
-    private init() {
-        root = FileManager.default
+    /// Bản nonisolated để Sticker Store gọi được từ luồng nền lúc giải nén.
+    nonisolated static var rootURL: URL {
+        FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appendingPathComponent("SlopShot", isDirectory: true)
             .appendingPathComponent("Stickers", isDirectory: true)
+    }
+
+    private init() {
+        root = Self.rootURL
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         reload()
     }
 
     // ── Quét đĩa ───────────────────────────────────────────────────────────
     func reload() {
+        // Nút ⟳ cũng dùng để "tôi vừa thay file ngoài Finder" → bỏ cache theo.
+        thumbs.removeAll(); animated.removeAll()
         let fm = FileManager.default
         let entries = (try? fm.contentsOfDirectory(at: root,
                                                    includingPropertiesForKeys: [.isDirectoryKey],
@@ -69,36 +80,75 @@ final class StickerLibrary: ObservableObject {
             .map(Sticker.init)
     }
 
-    static func isImage(_ url: URL) -> Bool {
+    nonisolated static func isImage(_ url: URL) -> Bool {
         UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true
     }
 
-    // ── Đọc ảnh (có cache) ─────────────────────────────────────────────────
-    func image(_ sticker: Sticker) -> NSImage? {
-        if let img = cache[sticker.url] { return img }
-        guard let img = Self.firstFrame(of: sticker.url) else { return nil }
-        cache[sticker.url] = img
+    // ── Cài từ Sticker Store ───────────────────────────────────────────────
+    // Ảnh ở đây đến từ file zip tải trên mạng về, nên tên file là dữ liệu LẠ:
+    // chỉ lấy phần tên cuối và vứt mọi thành phần đường dẫn, để gói có bịa
+    // "../../" cũng không ghi được ra ngoài thư mục bộ.
+    //
+    // nonisolated vì chạy trên luồng nền — copy cả trăm file mà chặn main thì
+    // popover đứng hình.
+    @discardableResult
+    nonisolated static func install(_ files: [URL], asPackNamed rawName: String) throws -> Int {
+        let fm = FileManager.default
+        let name = safeFolderName(rawName)
+        guard !name.isEmpty, !files.isEmpty else { return 0 }
+        let dir = rootURL.appendingPathComponent(name, isDirectory: true)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        // Gom sẵn những gì đang có, tra theo tên-không-đuôi: bản cũ của cùng con
+        // sticker có thể là .png trong khi bản mới là .webp, không xoá thì bộ có
+        // hai bản trùng nhau nằm cạnh nhau.
+        var existing: [String: [URL]] = [:]
+        for u in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [] {
+            existing[u.deletingPathExtension().lastPathComponent, default: []].append(u)
+        }
+
+        var n = 0
+        for f in files where isImage(f) {
+            let file = f.lastPathComponent
+            guard !file.hasPrefix("."), !file.contains("/"), !file.contains(":") else { continue }
+            let stem = (file as NSString).deletingPathExtension
+            for old in existing[stem] ?? [] { try? fm.removeItem(at: old) }
+            existing[stem] = nil
+            let dest = dir.appendingPathComponent(file)
+            try? fm.removeItem(at: dest)
+            try fm.copyItem(at: f, to: dest)
+            n += 1
+        }
+        return n
+    }
+
+    private nonisolated static func safeFolderName(_ raw: String) -> String {
+        raw.components(separatedBy: CharacterSet(charactersIn: "/:\\"))
+            .joined(separator: "-")
+            .replacingOccurrences(of: "..", with: ".")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // ── Đọc ảnh ────────────────────────────────────────────────────────────
+    // Lưới sticker chỉ cần frame ĐẦU và thu nhỏ sẵn: bộ 110 sticker gif 360px mà
+    // giữ nguyên cỡ trong cache là ngót 60MB RAM, thu về 160px còn ~11MB.
+    func thumbnail(_ sticker: Sticker) -> NSImage? {
+        if let img = thumbs[sticker.url] { return img }
+        guard let img = FrameSequence.thumbnail(sticker.url) else { return nil }
+        thumbs[sticker.url] = img
         return img
     }
 
-    // Lấy 1 hình TĨNH từ file sticker. Hai trường hợp phải gỡ:
-    //  1. Ảnh nhiều frame (gif/webp động) → lấy frame 0 qua CGImageSource.
-    //  2. SPRITE SHEET ngang: rất nhiều bộ sticker (Zalo chẳng hạn) đóng gói cả
-    //     animation vào 1 ảnh, các frame xếp cạnh nhau — ví dụ 1560×130 = 12 frame
-    //     130×130. Vẽ nguyên ảnh sẽ ra vệt kẻ sọc, nên cắt lấy ô vuông đầu tiên.
-    //     Chỉ cắt khi ngang chia hết cho cao và ≥3 lần, để không đụng ảnh
-    //     panorama/banner bình thường.
-    static func firstFrame(of url: URL) -> NSImage? {
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
-              CGImageSourceGetCount(src) > 0,
-              var cg = CGImageSourceCreateImageAtIndex(src, 0, nil)
-        else { return NSImage(contentsOf: url) }   // định dạng lạ → để NSImage tự lo
-        let w = cg.width, h = cg.height
-        if h > 0, w >= h * 3, w % h == 0,
-           let first = cg.cropping(to: CGRect(x: 0, y: 0, width: h, height: h)) {
-            cg = first
-        }
-        return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+    func isAnimated(_ sticker: Sticker) -> Bool {
+        if let flag = animated[sticker.url] { return flag }
+        let flag = FrameSequence.isAnimated(sticker.url)
+        animated[sticker.url] = flag
+        return flag
+    }
+
+    /// Toàn bộ frame ở kích thước gốc — chỉ gọi lúc thật sự chèn sticker vào ảnh.
+    func sequence(_ sticker: Sticker) -> FrameSequence? {
+        FrameSequence.load(sticker.url)
     }
 
     // ── Import ─────────────────────────────────────────────────────────────
@@ -177,11 +227,13 @@ final class StickerLibrary: ObservableObject {
 // Popover chọn sticker: cột trái danh sách bộ, phải là lưới sticker.
 // ─────────────────────────────────────────────────────────────────────────
 struct StickerPicker: View {
-    var onPick: (NSImage, String) -> Void
+    var onPick: (FrameSequence, String) -> Void
 
     @ObservedObject private var lib = StickerLibrary.shared
+    @ObservedObject private var store = StickerStore.shared
     @AppStorage("lastStickerPack") private var lastPack = ""
     @State private var dropTargeted = false
+    @State private var showStore = false
 
     // Bộ đang xem: bộ đã chọn lần trước, không còn thì lấy bộ đầu tiên.
     private var pack: StickerPack? {
@@ -190,7 +242,9 @@ struct StickerPicker: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if lib.packs.isEmpty { emptyState } else { browser }
+            if showStore { storePane }
+            else if lib.packs.isEmpty { emptyState }
+            else { browser }
             Divider()
             footer
         }
@@ -248,10 +302,10 @@ struct StickerPicker: View {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 62), spacing: 8)], spacing: 8) {
                 ForEach(p.stickers) { s in
                     Button {
-                        if let img = lib.image(s) { onPick(img, s.name) }
+                        if let seq = lib.sequence(s) { onPick(seq, s.name) }
                     } label: {
                         Group {
-                            if let img = lib.image(s) {
+                            if let img = lib.thumbnail(s) {
                                 Image(nsImage: img).resizable().interpolation(.high)
                                     .aspectRatio(contentMode: .fit)
                             } else {
@@ -261,15 +315,29 @@ struct StickerPicker: View {
                         .frame(width: 56, height: 56)
                         .padding(3)
                         .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+                        // Lưới chỉ vẽ frame đầu (cho nhẹ), nên phải có dấu báo con
+                        // nào là sticker động — không thì nhìn y hệt ảnh tĩnh.
+                        .overlay(alignment: .bottomTrailing) {
+                            if lib.isAnimated(s) { animatedBadge }
+                        }
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help(s.name)
+                    .help(lib.isAnimated(s) ? "\(s.name) · động" : s.name)
                 }
             }
             .padding(10)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private var animatedBadge: some View {
+        Text("GIF")
+            .font(.system(size: 7, weight: .heavy))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 3).padding(.vertical, 1)
+            .background(Color.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 3))
+            .padding(4)
     }
 
     private var emptyState: some View {
@@ -284,17 +352,113 @@ struct StickerPicker: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 300)
+            if store.isConfigured {
+                Button("Browse packs…") { showStore = true }
+                    .controlSize(.small)
+                    .padding(.top, 2)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    // ── Store: tải bộ về thay vì nhét sẵn trong app ────────────────────────
+    // App chỉ nặng vài MB; kho sticker cả trăm MB nằm trên R2, ai cần bộ nào thì
+    // bấm tải bộ đó.
+    private var storePane: some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                ForEach(store.packs) { p in
+                    storeRow(p)
+                    Divider().padding(.leading, 62)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay {
+            if store.loading && store.packs.isEmpty {
+                ProgressView().controlSize(.small)
+            } else if let err = store.loadError {
+                VStack(spacing: 8) {
+                    Image(systemName: "wifi.exclamationmark")
+                        .font(.system(size: 26, weight: .light))
+                        .foregroundStyle(.secondary)
+                    Text(err).font(.system(size: 11)).foregroundStyle(.secondary)
+                    Button("Try again") { Task { await store.refresh() } }.controlSize(.small)
+                }
+            } else if store.packs.isEmpty && !store.loading {
+                Text("No packs published yet")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+        }
+        .task { await store.loadIfNeeded() }
+    }
+
+    private func storeRow(_ p: RemotePack) -> some View {
+        let installed = lib.packs.contains { $0.name == p.name }
+        return HStack(spacing: 10) {
+            Group {
+                if let img = store.cover(p) {
+                    Image(nsImage: img).resizable().interpolation(.high).aspectRatio(contentMode: .fit)
+                } else {
+                    Image(systemName: "shippingbox").foregroundStyle(.tertiary)
+                }
+            }
+            .frame(width: 40, height: 40)
+            .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 7))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(p.name).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                Text(p.subtitle).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 6)
+            storeAction(p, installed: installed)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .task { await store.loadCover(p) }
+    }
+
+    @ViewBuilder
+    private func storeAction(_ p: RemotePack, installed: Bool) -> some View {
+        switch store.status[p.id] {
+        case .downloading(let frac):
+            // Có tổng dung lượng sẵn trong manifest nên hiện thanh thật, không
+            // phải vòng xoay vô định.
+            ProgressView(value: frac).progressViewStyle(.linear).frame(width: 64)
+        case .installing:
+            ProgressView().controlSize(.small)
+        case .failed(let msg):
+            Button("Retry") { Task { await store.download(p) } }
+                .controlSize(.small).help(msg)
+        default:
+            if installed {
+                Label("Installed", systemImage: "checkmark")
+                    .font(.system(size: 10)).foregroundStyle(.secondary).labelStyle(.titleAndIcon)
+            } else {
+                Button("Get") { Task { await store.download(p) } }.controlSize(.small)
+            }
+        }
+    }
+
     private var footer: some View {
         HStack(spacing: 8) {
-            Button("Import pack…") { importPack() }
-            Button("Open folder") { lib.revealInFinder() }
-            Spacer()
-            Button { lib.reload() } label: { Image(systemName: "arrow.clockwise") }
-                .help("Rescan the stickers folder")
+            if showStore {
+                Button { showStore = false } label: { Label("My packs", systemImage: "chevron.left") }
+                Spacer()
+                Button { Task { await store.refresh() } } label: { Image(systemName: "arrow.clockwise") }
+                    .help("Check for new packs")
+            } else {
+                Button("Import pack…") { importPack() }
+                Button("Open folder") { lib.revealInFinder() }
+                if store.isConfigured && !lib.packs.isEmpty {
+                    Button { showStore = true } label: {
+                        Label("Get packs", systemImage: "arrow.down.circle")
+                    }
+                }
+                Spacer()
+                Button { lib.reload() } label: { Image(systemName: "arrow.clockwise") }
+                    .help("Rescan the stickers folder")
+            }
         }
         .controlSize(.small)
         .padding(.horizontal, 10)

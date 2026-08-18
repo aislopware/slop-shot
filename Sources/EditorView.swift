@@ -58,10 +58,13 @@ struct Annotation: Identifiable {
     var points: [CGPoint]    // normalized 0...1
     var text: String = ""
     var number: Int = 0
-    var image: NSImage? = nil   // chỉ dùng cho tool .image (ảnh dán vào)
+    // Chỉ dùng cho tool .image (ảnh dán vào / sticker). Ảnh tĩnh = dãy 1 frame.
+    var seq: FrameSequence? = nil
     var flipH: Bool = false     // lật ngang
     var flipV: Bool = false     // lật dọc
     var rotation: Int = 0       // số lần xoay 90° theo chiều kim đồng hồ (0...3)
+
+    var isAnimated: Bool { seq?.isAnimated == true }
 }
 
 struct NamedColor: Identifiable {
@@ -98,6 +101,8 @@ struct EditorView: View {
     @State private var showColorPopover = false
     @State private var showWidthPopover = false
     @State private var showStickerPopover = false
+    @State private var animStart = Date()      // mốc 0 của mọi layer động
+    @State private var exporting = false       // đang dựng GIF (chặn bấm chồng)
     @FocusState private var textFocused: Bool
 
     init(image: NSImage, sourceURL: URL?, onClose: (() -> Void)? = nil) {
@@ -126,6 +131,10 @@ struct EditorView: View {
     private var nextCounter: Int {
         (annotations.filter { $0.tool == .counter }.map { $0.number }.max() ?? 0) + 1
     }
+
+    // Có layer nào đang động không → quyết định preview có chạy và xuất ra GIF hay ảnh tĩnh.
+    private var animatedLayers: [Annotation] { annotations.filter(\.isAnimated) }
+    private var hasAnimation: Bool { !animatedLayers.isEmpty }
 
     // ── Layout: toolbar OVERLAYS the top so it's never clipped ─────────────
     var body: some View {
@@ -174,16 +183,17 @@ struct EditorView: View {
     // Đọc ảnh từ clipboard, đặt thành 1 layer ở giữa canvas (~50% bề ngang),
     // giữ đúng tỉ lệ ảnh gốc. Trả về false nếu clipboard không có ảnh.
     private func pasteImage() -> Bool {
-        guard let img = Self.imageFromClipboard() else { return false }
-        placeImage(img, widthFraction: 0.5, note: "Pasted image")
+        guard let seq = Self.imageFromClipboard() else { return false }
+        placeImage(seq, widthFraction: 0.5,
+                   note: seq.isAnimated ? "Pasted GIF (\(seq.frames.count) frames)" : "Pasted image")
         return true
     }
 
     // Đặt 1 ảnh thành layer .image ở giữa canvas, giữ đúng tỉ lệ ảnh gốc.
     // Dùng chung cho ⌘V (ảnh clipboard) và cho sticker.
-    private func placeImage(_ img: NSImage, widthFraction: CGFloat, note: String) {
+    private func placeImage(_ seq: FrameSequence, widthFraction: CGFloat, note: String) {
         let baseW = max(image.size.width, 1), baseH = max(image.size.height, 1)
-        let imgW = max(img.size.width, 1), imgH = max(img.size.height, 1)
+        let imgW = max(seq.size.width, 1), imgH = max(seq.size.height, 1)
         // Toạ độ normalized tính theo ảnh nền → phải quy đổi để ảnh dán không bị méo.
         var nw = widthFraction
         var nh = (nw * baseW) * (imgH / imgW) / baseH
@@ -191,7 +201,7 @@ struct EditorView: View {
         let topLeft = CGPoint(x: 0.5 - nw / 2, y: 0.5 - nh / 2)
         let bottomRight = CGPoint(x: 0.5 + nw / 2, y: 0.5 + nh / 2)
         let a = Annotation(tool: .image, color: .clear, lineWidth: 0,
-                           points: [topLeft, bottomRight], image: img)
+                           points: [topLeft, bottomRight], seq: seq)
         annotations.append(a)
         redoStack.removeAll(); clearedBackup = nil
         tool = .select        // chuyển sang Select để kéo chỉnh vị trí ngay
@@ -201,23 +211,25 @@ struct EditorView: View {
     }
 
     // Lấy ẢNH THẬT từ clipboard, xử lý cả khi copy FILE từ Finder.
-    private static func imageFromClipboard() -> NSImage? {
+    // Copy một GIF động thì dán vào cũng phải ra GIF động, nên đọc theo frame.
+    private static func imageFromClipboard() -> FrameSequence? {
         let pb = NSPasteboard.general
         // 1. Copy file ảnh từ Finder → clipboard chứa file URL → nạp NỘI DUNG file
         //    (NSImage(pasteboard:) ở đây chỉ trả icon của file, nên phải tự đọc).
         if let urls = pb.readObjects(forClasses: [NSURL.self],
               options: [.urlReadingContentsConformToTypes: [UTType.image.identifier]]) as? [URL],
-           let url = urls.first, let img = NSImage(contentsOf: url) {
-            return img
+           let url = urls.first, let seq = FrameSequence.load(url) {
+            return seq
         }
-        // 2. Bitmap thô trên clipboard (copy từ Preview/trình duyệt…).
-        for type in [NSPasteboard.PasteboardType.png, .tiff] {
-            if let data = pb.data(forType: type), let img = NSImage(data: data) {
-                return img
+        // 2. Bitmap thô trên clipboard (copy từ Preview/trình duyệt…). GIF đứng
+        //    trước PNG/TIFF vì chỉ mình nó giữ được animation.
+        for type in [NSPasteboard.PasteboardType(UTType.gif.identifier), .png, .tiff] {
+            if let data = pb.data(forType: type), let seq = FrameSequence.load(data: data) {
+                return seq
             }
         }
         // 3. Phương án cuối.
-        return NSImage(pasteboard: pb)
+        return NSImage(pasteboard: pb).map(FrameSequence.init)
     }
 
     private func removeKeyMonitor() {
@@ -271,17 +283,15 @@ struct EditorView: View {
                         .resizable().interpolation(.high)
                         .frame(width: size.width, height: size.height)
 
-                    Canvas { ctx, _ in
-                        for a in annotations where a.id != editingID {
-                            Self.draw(a, base: image, size: size, in: &ctx)
+                    // Có sticker động thì để TimelineView đập nhịp lại canvas; không
+                    // có thì vẽ tĩnh — khỏi tốn CPU vẽ lại 15 lần/giây vô ích.
+                    if hasAnimation {
+                        TimelineView(.animation(minimumInterval: 1 / 15)) { tl in
+                            canvas(size, time: tl.date.timeIntervalSince(animStart))
                         }
-                        if let c = current { Self.draw(c, base: image, size: size, in: &ctx) }
-                        // Khung + 4 handle góc khi đang chọn ảnh (chỉ ở tool Select).
-                        if tool == .select, let a = selectedImage {
-                            Self.drawHandles(a, size: size, in: &ctx)
-                        }
+                    } else {
+                        canvas(size, time: 0)
                     }
-                    .frame(width: size.width, height: size.height)
 
                     if let id = editingID, let idx = annotations.firstIndex(where: { $0.id == id }) {
                         TextField("Text…", text: $annotations[idx].text)
@@ -314,6 +324,21 @@ struct EditorView: View {
         .background(Color(white: 0.11))
     }
 
+    // Lớp annotation. Tách ra hàm riêng vì được gọi từ 2 nhánh (tĩnh / TimelineView).
+    private func canvas(_ size: CGSize, time: Double) -> some View {
+        Canvas { ctx, _ in
+            for a in annotations where a.id != editingID {
+                Self.draw(a, base: image, size: size, time: time, in: &ctx)
+            }
+            if let c = current { Self.draw(c, base: image, size: size, time: time, in: &ctx) }
+            // Khung + 4 handle góc khi đang chọn ảnh (chỉ ở tool Select).
+            if tool == .select, let a = selectedImage {
+                Self.drawHandles(a, size: size, in: &ctx)
+            }
+        }
+        .frame(width: size.width, height: size.height)
+    }
+
     private func fittedSize(in avail: CGSize) -> CGSize {
         let pad: CGFloat = 28
         let w = max(avail.width - pad * 2, 50), h = max(avail.height - pad * 2, 50)
@@ -337,11 +362,13 @@ struct EditorView: View {
             Button("Save as…") { saveAs() }
                 .controlSize(.large)
                 .buttonBorderShape(.roundedRectangle(radius: 4))
+                .disabled(exporting)
             Button("Done") { done() }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .buttonBorderShape(.roundedRectangle(radius: 4))
                 .keyboardShortcut(.defaultAction)
+                .disabled(exporting)
         }
         .padding(.horizontal, 14)
         .frame(height: barHeight)
@@ -469,9 +496,12 @@ struct EditorView: View {
         .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
         .help("Stickers")
         .popover(isPresented: $showStickerPopover, arrowEdge: .bottom) {
-            StickerPicker { img, name in
+            StickerPicker { seq, name in
                 haptic()
-                placeImage(img, widthFraction: 0.28, note: "Added sticker “\(name)”")
+                placeImage(seq, widthFraction: 0.28,
+                           note: seq.isAnimated
+                               ? "Added animated sticker “\(name)” — Copy/Save gives a GIF"
+                               : "Added sticker “\(name)”")
                 showStickerPopover = false
             }
         }
@@ -548,6 +578,8 @@ struct EditorView: View {
             iconButton("square.and.arrow.up", "Share") { share() }
             iconButton("doc.on.doc", "Copy") { copyToClipboard() }
         }
+        // Dựng GIF mất vài giây; khoá nút cho khỏi bấm chồng lên nhau.
+        .disabled(exporting)
         .padding(.horizontal, 16)
         .frame(height: 44)
         .background(Color(white: 0.13))
@@ -844,8 +876,9 @@ struct EditorView: View {
 
     // ── Draw one annotation, scaling normalized coords to `size` ───────────
     // `base` = ảnh nền, chỉ tool .blur cần (nó vẽ lại chính ảnh nền đã làm mờ).
+    // `time` = giây tính từ lúc mở editor, để layer ảnh động lấy đúng frame.
     private static func draw(_ a: Annotation, base: NSImage?, size s: CGSize,
-                             in ctx: inout GraphicsContext) {
+                             time: Double, in ctx: inout GraphicsContext) {
         func P(_ n: CGPoint) -> CGPoint { CGPoint(x: n.x * s.width, y: n.y * s.height) }
         guard let n0 = a.points.first else { return }
         let start = P(n0)
@@ -857,7 +890,7 @@ struct EditorView: View {
             break
         case .image:
             // Vẽ ảnh dán vào, fit khung [start, end], có áp dụng lật/xoay.
-            if let img = a.image {
+            if let img = a.seq?.frame(at: time) {
                 let r = rect(start, end)
                 let odd = a.rotation % 2 != 0
                 // Xoay 90°/270° thì bề ngang↔cao đổi chỗ → vẽ trong hệ đã xoay
@@ -957,23 +990,89 @@ struct EditorView: View {
     }
 
     // ── Export at full resolution ──────────────────────────────────────────
-    @MainActor
-    private func renderImage() -> NSImage? {
-        editingID = nil
+    // Ảnh nền + mọi annotation, bẹp thành một lớp, ở thời điểm `time`.
+    private func flattened(time: Double) -> some View {
         let px = image.size
-        let content = ZStack {
+        return ZStack {
             Image(nsImage: image).resizable().interpolation(.high)
                 .frame(width: px.width, height: px.height)
             Canvas { ctx, _ in
-                for a in annotations { Self.draw(a, base: image, size: px, in: &ctx) }
+                for a in annotations {
+                    Self.draw(a, base: image, size: px, time: time, in: &ctx)
+                }
             }
             .frame(width: px.width, height: px.height)
         }
         .frame(width: px.width, height: px.height)
+    }
 
-        let renderer = ImageRenderer(content: content)
+    @MainActor
+    private func renderImage() -> NSImage? {
+        editingID = nil
+        let renderer = ImageRenderer(content: flattened(time: 0))
         renderer.scale = 1
         return renderer.nsImage
+    }
+
+    /// Một frame để ghép GIF. `scale` < 1 khi ảnh nền to hơn trần kích thước GIF.
+    @MainActor
+    private func renderFrame(time: Double, scale: CGFloat) -> CGImage? {
+        let renderer = ImageRenderer(content: flattened(time: time))
+        renderer.scale = scale
+        return renderer.cgImage
+    }
+
+    // Lịch frame của GIF: mỗi phần tử là (lấy frame ở giây nào, frame đó giữ bao lâu).
+    //
+    // Chỉ MỘT layer động — ca gần như luôn xảy ra — thì bám đúng nhịp gốc của nó,
+    // GIF ra chạy y hệt sticker. Nhiều layer thì các nhịp lệch nhau, không có mẫu
+    // số chung tử tế, nên lấy mẫu đều 20fps theo layer dài nhất.
+    private func gifTimeline() -> [(time: Double, delay: Double)] {
+        let maxFrames = 200      // ~10s ở 20fps; quá mức này GIF nặng tới mức vô dụng
+        if animatedLayers.count == 1, let seq = animatedLayers[0].seq {
+            var out: [(time: Double, delay: Double)] = []
+            var t = 0.0
+            for d in seq.delays.prefix(maxFrames) {
+                out.append((time: t, delay: d))
+                t += d
+            }
+            return out
+        }
+        let longest = animatedLayers.compactMap { $0.seq?.duration }.max() ?? 1
+        let step = 1.0 / 20
+        let n = min(max(Int((min(longest, 10) / step).rounded()), 1), maxFrames)
+        return (0..<n).map { (time: Double($0) * step, delay: step) }
+    }
+
+    // Dựng GIF động. Render xong frame nào ĐẨY LUÔN vào writer, không gom mảng
+    // CGImage: 1600px × 50 frame là ngót 500MB nếu ôm hết trong RAM.
+    @MainActor
+    private func renderGIF() async -> Data? {
+        editingID = nil
+        let plan = gifTimeline()
+        guard !plan.isEmpty, let writer = GIFWriter(frameCount: plan.count) else { return nil }
+        let long = max(image.size.width, image.size.height)
+        let scale = long > GIFWriter.maxEdge ? GIFWriter.maxEdge / long : 1
+        for (i, step) in plan.enumerated() {
+            guard let cg = renderFrame(time: step.time, scale: scale) else { continue }
+            writer.add(cg, delay: step.delay)
+            status = "Building GIF… \(i + 1)/\(plan.count)"
+            await Task.yield()      // nhả main thread ra cho dòng trạng thái kịp vẽ
+        }
+        return writer.finish()
+    }
+
+    // Ghi GIF ra file tạm. Dán FILE vào Slack/Zalo là chắc ăn nhất — nhiều app
+    // nhận data ảnh thô rồi tự dựng lại thành ảnh tĩnh, mất sạch animation.
+    private func tempGIF(_ data: Data) -> URL? {
+        let name = sourceURL?.deletingPathExtension().lastPathComponent ?? "SlopShot"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(name).gif")
+        do { try data.write(to: url); return url } catch { return nil }
+    }
+
+    private func sizeText(_ bytes: Int) -> String {
+        bytes >= 1 << 20 ? String(format: "%.1f MB", Double(bytes) / Double(1 << 20))
+                         : "\(bytes >> 10) KB"
     }
 
     private func pngData(_ img: NSImage) -> Data? {
@@ -997,6 +1096,7 @@ struct EditorView: View {
 
     private func copyToClipboard() {
         haptic()
+        if hasAnimation { copyAnimated(); return }
         guard let img = renderImage() else { return }
         let pb = NSPasteboard.general
         pb.clearContents()
@@ -1004,18 +1104,53 @@ struct EditorView: View {
         status = "Copied"
     }
 
+    // Copy bản GIF. Clipboard chỉ mang FILE gif + data gif, CỐ TÌNH không kèm
+    // png/tiff: app nhận được bitmap tĩnh là nó lấy bitmap, animation đi tong.
+    private func copyAnimated(then finish: (() -> Void)? = nil) {
+        guard !exporting else { return }
+        exporting = true
+        Task { @MainActor in
+            defer { exporting = false }
+            guard let data = await renderGIF() else { status = "GIF export failed"; return }
+            let item = NSPasteboardItem()
+            item.setData(data, forType: .init(UTType.gif.identifier))
+            if let url = tempGIF(data) { item.setString(url.absoluteString, forType: .fileURL) }
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.writeObjects([item])
+            status = "Copied GIF — \(gifTimeline().count) frames, \(sizeText(data.count))"
+            finish?()
+        }
+    }
+
     @MainActor
     private func share() {
         haptic()
-        guard let img = renderImage(),
-              let view = NSApp.keyWindow?.contentView else { return }
-        let picker = NSSharingServicePicker(items: [img])
-        picker.show(relativeTo: .zero, of: view, preferredEdge: .minY)
+        guard let view = NSApp.keyWindow?.contentView else { return }
+        if hasAnimation {
+            guard !exporting else { return }
+            exporting = true
+            Task { @MainActor in
+                defer { exporting = false }
+                guard let data = await renderGIF(), let url = tempGIF(data) else {
+                    status = "GIF export failed"; return
+                }
+                NSSharingServicePicker(items: [url])
+                    .show(relativeTo: .zero, of: view, preferredEdge: .minY)
+                status = "Shared GIF (\(sizeText(data.count)))"
+            }
+            return
+        }
+        guard let img = renderImage() else { return }
+        NSSharingServicePicker(items: [img])
+            .show(relativeTo: .zero, of: view, preferredEdge: .minY)
     }
 
     private func done() {
-        copyToClipboard()
-        onClose?()
+        haptic()
+        // Dựng GIF mất vài giây → đóng cửa sổ SAU khi copy xong, không thì
+        // editor biến mất mà clipboard vẫn rỗng.
+        if hasAnimation { copyAnimated { onClose?() } } else { copyToClipboard(); onClose?() }
     }
 
     private func saveAs() {
@@ -1023,19 +1158,34 @@ struct EditorView: View {
         let base = sourceURL?.deletingPathExtension().lastPathComponent ?? "SlopShot edited"
         let panel = NSSavePanel()
         // Tự thêm dropdown chọn định dạng (NSSavePanel không tự hiện popup này).
-        let accessory = SaveFormatAccessory(baseName: base)
+        // Có layer động thì GIF lên đầu và thành mặc định.
+        let accessory = SaveFormatAccessory(baseName: base, animated: hasAnimation)
         panel.accessoryView = accessory.makeAccessory(for: panel)
-        panel.nameFieldStringValue = "\(base).png"
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
+        if hasAnimation, accessory.selectedFileType == .gif {
+            guard !exporting else { return }
+            exporting = true
+            Task { @MainActor in
+                defer { exporting = false }
+                guard let data = await renderGIF() else { status = "Export failed"; return }
+                write(data, to: url)
+            }
+            return
+        }
+        // Định dạng tĩnh: bẹp về frame đầu, giống hệt trước giờ.
         guard let img = renderImage(),
               let data = encode(img, as: accessory.selectedFileType) else {
             status = "Export failed"; return
         }
+        write(data, to: url)
+    }
+
+    private func write(_ data: Data, to url: URL) {
         do {
             try data.write(to: url)
-            status = "Saved \(url.lastPathComponent)"
+            status = "Saved \(url.lastPathComponent) (\(sizeText(data.count)))"
         } catch {
             status = "Save failed"
         }
@@ -1127,13 +1277,7 @@ enum ImageOps {
 // ─────────────────────────────────────────────────────────────────────────
 @MainActor
 final class SaveFormatAccessory: NSObject {
-    private let formats: [(title: String, type: NSBitmapImageRep.FileType, ut: UTType)] = [
-        ("PNG", .png, .png),
-        ("JPEG", .jpeg, .jpeg),
-        ("TIFF", .tiff, .tiff),
-        ("BMP", .bmp, .bmp),
-        ("GIF", .gif, .gif),
-    ]
+    private let formats: [(title: String, type: NSBitmapImageRep.FileType, ut: UTType)]
     private let baseName: String
     private weak var panel: NSSavePanel?
     /// Chỉ số định dạng đang chọn. Là ObservableObject nên Picker bên dưới
@@ -1145,8 +1289,20 @@ final class SaveFormatAccessory: NSObject {
         @Published var index = 0
     }
 
-    init(baseName: String) {
+    /// `animated`: ảnh có layer động. Khi đó GIF là định dạng duy nhất giữ được
+    /// animation nên nó lên đầu (= mặc định), các định dạng còn lại nói thẳng
+    /// trong tên là chỉ lấy frame đầu.
+    init(baseName: String, animated: Bool) {
         self.baseName = baseName
+        formats = animated
+            ? [("GIF (animated)", .gif, .gif),
+               ("PNG (first frame)", .png, .png),
+               ("JPEG (first frame)", .jpeg, .jpeg)]
+            : [("PNG", .png, .png),
+               ("JPEG", .jpeg, .jpeg),
+               ("TIFF", .tiff, .tiff),
+               ("BMP", .bmp, .bmp),
+               ("GIF", .gif, .gif)]
         super.init()
     }
 
