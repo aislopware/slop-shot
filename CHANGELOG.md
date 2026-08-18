@@ -4,7 +4,17 @@ Sinh từ commit log bằng [git-cliff](https://git-cliff.org). Mục nào nằm
 loại (type) của commit quyết định — tức quyết định lúc VIẾT commit, không phải lúc cắt
 release. Quy ước được `scripts/check-commit-msg.sh` chặn ngay ở hook commit-msg.
 
-## Unreleased
+## [0.1.0](https://github.com/aislopware/slop-shot/releases/tag/v0.1.0) — 2026-08-18
+
+### Documentation
+
+- Write up the pipeline and how to install from brew ([`1e90fb3`](https://github.com/aislopware/slop-shot/commit/1e90fb37ea2a2742079855ee73144b93e06fbc95))
+
+### Tooling
+
+- Reformat the shell scripts with shfmt ([`ba34852`](https://github.com/aislopware/slop-shot/commit/ba34852bfe4fefba147d94f7d8071248f2c03367))
+- Sign, notarize and ship a DMG to the Homebrew tap ([`173ed0f`](https://github.com/aislopware/slop-shot/commit/173ed0f7c7010c53d740c1736b1b1303f3751963))
+- Install the better-update CLI from latest, not a pin ([`563830d`](https://github.com/aislopware/slop-shot/commit/563830d585bf1ccc24512acf7eed433176cf63d5))
 
 ### Other changes
 
