@@ -7,8 +7,10 @@ import UniformTypeIdentifiers
 // stay correct when the board is resized (responsive) and when exported full-res.
 // ─────────────────────────────────────────────────────────────────────────
 enum Tool: String, CaseIterable, Identifiable {
-    // .image KHÔNG có nút trên toolbar — chỉ sinh ra khi paste ảnh (⌘V).
-    case select, rect, ellipse, line, arrow, highlight, blur, pen, text, counter, image
+    // .image và .censor KHÔNG có nút trên toolbar: .image sinh ra khi paste ảnh
+    // (⌘V), .censor khi bấm Redact. Vẫn là annotation bình thường nên chọn được,
+    // ⌫ xoá được, ⌘Z gỡ được — không phải viết lại cơ chế nào cả.
+    case select, rect, ellipse, line, arrow, highlight, blur, pen, text, counter, image, censor
     var id: String { rawValue }
 
     var icon: String {
@@ -24,6 +26,7 @@ enum Tool: String, CaseIterable, Identifiable {
         case .text:      return "textformat"
         case .counter:   return "1.circle"
         case .image:     return "photo"
+        case .censor:    return "rectangle.fill"
         }
     }
     var label: String {
@@ -39,6 +42,7 @@ enum Tool: String, CaseIterable, Identifiable {
         case .text:      return "Text"
         case .counter:   return "Counter"
         case .image:     return "Image"
+        case .censor:    return "Redaction"
         }
     }
     var drawsOnDrag: Bool {
@@ -107,11 +111,13 @@ struct EditorView: View {
     @State private var pendingMatches: [SensitiveMatch] = []  // kết quả dò sẵn lúc mở
     @State private var redactHint = 0          // >0 → chấm đỏ trên nút Redact
     @State private var scanning = false        // đang dò (chặn bấm chồng)
-    // Lô ô blur của LẦN redact gần nhất — để ⌘Z gỡ cả loạt chứ không từng cái.
+    // Lô ô đen của LẦN redact gần nhất — để ⌘Z gỡ cả loạt chứ không từng cái.
     @State private var redactBatch: Set<UUID> = []
     @State private var redoBatch: Set<UUID> = []
     // Lô vừa che là những gì — ⌘Z gỡ ra thì lấy lại đúng cảnh báo cũ.
     @State private var redactedMatches: [SensitiveMatch] = []
+    // ⎋ lần đầu khi còn nét vẽ chỉ "lên cò" — lần hai mới đóng thật.
+    @State private var escArmed = false
     @FocusState private var textFocused: Bool
 
     init(image: NSImage, sourceURL: URL?, onClose: (() -> Void)? = nil) {
@@ -159,6 +165,8 @@ struct EditorView: View {
         .background(Color(white: 0.11))
         .ignoresSafeArea()
         .onAppear { installKeyMonitor() }
+        // Vẽ thêm/xoá bớt là nhả cò ⎋ ra — không thì lỡ tay một phím sau đó là bay.
+        .onChange(of: annotations.count) { _, _ in escArmed = false }
         .onDisappear { removeKeyMonitor() }
         .task { await scanForSensitiveData() }
     }
@@ -175,6 +183,24 @@ struct EditorView: View {
                !event.modifierFlags.contains(.command),
                editingID == nil, selectedID != nil {
                 deleteSelected()
+                return nil
+            }
+            // ⎋: thoát dần. Traffic-light của cửa sổ editor bị ẩn nên không có
+            // phím này thì lối ra duy nhất là nút Done — mà Done thì CHÉP ảnh,
+            // không phải huỷ. Có nét vẽ thì hỏi lại một nhịp, đừng nuốt mất việc
+            // của người ta chỉ vì một phím lỡ tay.
+            if event.keyCode == 53, !event.modifierFlags.contains(.command) {
+                // Popover đang mở: trả event lại cho nó tự đóng.
+                if showColorPopover || showWidthPopover || showStickerPopover { return event }
+                if editingID != nil { editingID = nil; textFocused = false; return nil }
+                if selectedID != nil { selectedID = nil; return nil }
+                if !annotations.isEmpty, !escArmed {
+                    escArmed = true
+                    status = "Press ⎋ again to discard \(annotations.count) "
+                           + "annotation\(annotations.count == 1 ? "" : "s") and close"
+                    return nil
+                }
+                onClose?()
                 return nil
             }
             guard event.modifierFlags.contains(.command) else { return event }
@@ -254,6 +280,40 @@ struct EditorView: View {
         if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
     }
 
+    // ── Đổi màu / độ dày cho layer ĐANG CHỌN ──────────────────────────────
+    // Trước đây hai control này chỉ đặt mặc định cho nét VẼ TIẾP THEO: muốn đổi
+    // màu một mũi tên đã vẽ thì phải xoá đi vẽ lại. Giờ có chọn layer thì sửa
+    // luôn layer đó (và vẫn nhớ làm mặc định cho nét sau).
+    private static let colorable: Set<Tool> = [.rect, .ellipse, .line, .arrow, .highlight,
+                                               .pen, .text, .counter, .censor]
+    // Chỉ những tool mà lineWidth thật sự đổi hình. .highlight/.text/.counter cỡ
+    // cố định, .image/.censor không có nét → sửa cũng chẳng thấy gì.
+    private static let widthable: Set<Tool> = [.rect, .ellipse, .line, .arrow, .pen, .blur]
+
+    // Layer đang chọn, nếu tool của nó nằm trong `kinds`.
+    private func selectedIndex(among kinds: Set<Tool>) -> Int? {
+        guard let id = selectedID,
+              let i = annotations.firstIndex(where: { $0.id == id }),
+              kinds.contains(annotations[i].tool) else { return nil }
+        return i
+    }
+
+    private func applyColor(_ c: Color) {
+        color = c
+        guard let i = selectedIndex(among: Self.colorable) else { return }
+        annotations[i].color = c
+        status = "Recolored the selected \(annotations[i].tool.label.lowercased())"
+    }
+
+    private func applyWidth(_ w: CGFloat) {
+        lineWidth = w
+        guard let i = selectedIndex(among: Self.widthable) else { return }
+        annotations[i].lineWidth = w
+        status = annotations[i].tool == .blur
+            ? "Changed blur strength on the selected layer"
+            : "Changed stroke width on the selected \(annotations[i].tool.label.lowercased())"
+    }
+
     private func undo() {
         // Vừa bấm Clear (canvas trống) → Undo khôi phục NGUYÊN loạt vừa xóa.
         if annotations.isEmpty, let backup = clearedBackup {
@@ -271,7 +331,7 @@ struct EditorView: View {
             redoStack.append(contentsOf: batch)
             redoBatch = redactBatch
             redactBatch = []
-            // Gỡ blur ra là dữ liệu nhạy cảm HIỆN LẠI — phải cảnh báo lại y như
+            // Gỡ ô che ra là dữ liệu nhạy cảm HIỆN LẠI — phải cảnh báo lại y như
             // lúc mới mở ảnh, không thì chấm cam tắt ngóm mà ảnh thì đang hở.
             pendingMatches = redactedMatches
             redactHint = redactedMatches.count
@@ -417,13 +477,8 @@ struct EditorView: View {
     private var topBar: some View {
         HStack(spacing: 10) {
             toolbarTools
-            colorControl
-            widthControl
-            stickerControl
-            redactButton
-            undoButton
-            clearButton
-            imageTransformControls   // luôn hiện: có chọn ảnh→đổi ảnh đó, không→đổi ảnh nền
+            styleControls
+            actionControls
             Spacer(minLength: 8)
             Button("Save as…") { saveAs() }
                 .controlSize(.large)
@@ -445,9 +500,19 @@ struct EditorView: View {
         }
     }
 
+    // Thanh chỉ cao 52px mà trước đây có tới 8 nền xám rời nhau — nhìn như một
+    // dãy nút hạt lựu không phân nhóm. Gom lại còn 3 pill: vẽ gì / vẽ thế nào /
+    // làm gì với ảnh.
+    private func pill<C: View>(@ViewBuilder _ content: () -> C) -> some View {
+        HStack(spacing: 3) { content() }
+            .padding(5)
+            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 11))
+            .overlay(RoundedRectangle(cornerRadius: 11).stroke(.white.opacity(0.08), lineWidth: 1))
+    }
+
     // Các tool gom thành 1 pill, chia khối bằng vạch ngăn cho dễ nhìn.
     private var toolbarTools: some View {
-        HStack(spacing: 3) {
+        pill {
             toolButton(.select)
             divider
             toolButton(.rect); toolButton(.ellipse); toolButton(.line); toolButton(.arrow)
@@ -456,9 +521,23 @@ struct EditorView: View {
             divider
             toolButton(.text); toolButton(.counter)
         }
-        .padding(5)
-        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 11))
-        .overlay(RoundedRectangle(cornerRadius: 11).stroke(.white.opacity(0.08), lineWidth: 1))
+    }
+
+    // Nét trông thế nào: màu, độ dày, sticker.
+    private var styleControls: some View {
+        pill { colorControl; widthControl; divider; stickerControl }
+    }
+
+    // Thao tác trên cả tấm ảnh: redact, undo, xoá sạch, lật/xoay.
+    private var actionControls: some View {
+        pill {
+            redactButton
+            divider
+            undoButton; clearButton
+            divider
+            // Luôn hiện: có chọn ảnh→đổi ảnh đó, không→đổi ảnh nền.
+            imageTransformControls
+        }
     }
 
     private var divider: some View {
@@ -490,13 +569,12 @@ struct EditorView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
         .help("Color")
         .popover(isPresented: $showColorPopover, arrowEdge: .bottom) {
             let cols = Array(repeating: GridItem(.fixed(26), spacing: 10), count: 5)
             LazyVGrid(columns: cols, spacing: 10) {
                 ForEach(palette) { c in
-                    Button { color = c.color; showColorPopover = false } label: {
+                    Button { applyColor(c.color); showColorPopover = false } label: {
                         Circle().fill(c.color)
                             .frame(width: 24, height: 24)
                             .overlay(Circle().stroke(
@@ -521,12 +599,11 @@ struct EditorView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
         .help("Stroke width · blur strength")
         .popover(isPresented: $showWidthPopover, arrowEdge: .bottom) {
             VStack(spacing: 2) {
                 ForEach(widths, id: \.0) { name, w in
-                    Button { lineWidth = w; showWidthPopover = false } label: {
+                    Button { applyWidth(w); showWidthPopover = false } label: {
                         HStack(spacing: 12) {
                             RoundedRectangle(cornerRadius: 3)
                                 .fill(lineWidth == w ? Color.accentColor : Color(white: 0.8))
@@ -559,7 +636,6 @@ struct EditorView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
         .help("Stickers")
         .popover(isPresented: $showStickerPopover, arrowEdge: .bottom) {
             StickerPicker { seq, name in
@@ -573,36 +649,39 @@ struct EditorView: View {
         }
     }
 
-    // Bộ nút lật/xoay. Áp dụng cho ảnh đang chọn, hoặc ảnh nền nếu không chọn gì.
+    // Lật/xoay. Áp dụng cho ảnh đang chọn, hoặc ảnh nền nếu không chọn gì.
+    // Bốn nút rời ăn mất ~140px thanh trên — bốn thao tác hiếm dùng thì một menu
+    // là đủ, mà tên đầy đủ trong menu còn dễ hiểu hơn bốn cái icon mũi tên.
     private var imageTransformControls: some View {
-        HStack(spacing: 3) {
-            transformButton("arrow.left.and.right.righttriangle.left.righttriangle.right",
-                            "Flip horizontal") { doFlip(horizontal: true) }
-            transformButton("arrow.up.and.down.righttriangle.up.righttriangle.down",
-                            "Flip vertical") { doFlip(horizontal: false) }
-            divider
-            transformButton("rotate.left", "Rotate left") { doRotate(clockwise: false) }
-            transformButton("rotate.right", "Rotate right") { doRotate(clockwise: true) }
-        }
-        .padding(5)
-        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 11))
-        .overlay(RoundedRectangle(cornerRadius: 11).stroke(.white.opacity(0.08), lineWidth: 1))
-    }
-
-    private func transformButton(_ symbol: String, _ tip: String,
-                                 _ action: @escaping () -> Void) -> some View {
-        Button { haptic(); action() } label: {
-            Image(systemName: symbol)
+        Menu {
+            transformItem("Flip horizontal",
+                          "arrow.left.and.right.righttriangle.left.righttriangle.right") {
+                doFlip(horizontal: true)
+            }
+            transformItem("Flip vertical",
+                          "arrow.up.and.down.righttriangle.up.righttriangle.down") {
+                doFlip(horizontal: false)
+            }
+            Divider()
+            transformItem("Rotate left", "rotate.left") { doRotate(clockwise: false) }
+            transformItem("Rotate right", "rotate.right") { doRotate(clockwise: true) }
+        } label: {
+            Image(systemName: "crop.rotate")
                 .font(.system(size: 14, weight: .medium))
-                .frame(width: 30, height: 28)
-                .contentShape(Rectangle())
+                .foregroundStyle(Color(white: 0.85))
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(Color(white: 0.85))
-        .help(tip)
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: 30, height: 28)
+        .help("Flip & rotate")
     }
 
-    // ── Redact: dò email/điện thoại/số thẻ/token rồi úp ô blur lên ────────
+    private func transformItem(_ title: String, _ symbol: String,
+                               _ action: @escaping () -> Void) -> some View {
+        Button { haptic(); action() } label: { Label(title, systemImage: symbol) }
+    }
+
+    // ── Redact: dò email/điện thoại/số thẻ/token rồi úp ô đen lên ─────────
     // Chấm cam = lúc mở editor đã dò thấy sẵn, chỉ chờ bấm.
     private var redactButton: some View {
         Button { haptic(); redactNow() } label: {
@@ -623,11 +702,10 @@ struct EditorView: View {
                 }
         }
         .buttonStyle(.plain)
-        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
         .disabled(scanning)
         .help(redactHint > 0
               ? "Redact — \(redactHint) sensitive item\(redactHint == 1 ? "" : "s") found"
-              : "Redact — find & blur emails, phone numbers, card numbers and tokens")
+              : "Redact — find & black out emails, phone numbers, card numbers and tokens")
     }
 
     // Dò lúc mở editor: KHÔNG bôi gì cả, chỉ đếm rồi mách. Tự sửa ảnh của người
@@ -640,12 +718,12 @@ struct EditorView: View {
         pendingMatches = found
         redactHint = found.count
         status = "\(found.count) sensitive item\(found.count == 1 ? "" : "s") "
-               + "(\(SensitiveScanner.summary(found))) — hit Redact to blur"
+               + "(\(SensitiveScanner.summary(found))) — hit Redact to black them out"
     }
 
     private func redactNow() {
         guard !scanning, let cg = ImageOps.cg(image) else { return }
-        // Bấm Redact lần hai: lớp blur không nằm trong ảnh gốc nên dò lại vẫn ra
+        // Bấm Redact lần hai: lớp che không nằm trong ảnh gốc nên dò lại vẫn ra
         // đúng ngần ấy chỗ và đắp chồng thêm một lô nữa. Chặn ở đây.
         if !redactBatch.isEmpty, redactBatch.isSubset(of: Set(annotations.map(\.id))) {
             status = "Already redacted — ⌘Z to take it back out"
@@ -667,7 +745,7 @@ struct EditorView: View {
                 // đọc được mấy nét thò ra ngoài.
                 let r = m.rect.insetBy(dx: -0.004, dy: -0.006)
                 let a = Annotation(
-                    tool: .blur, color: .clear, lineWidth: Self.redactStrength,
+                    tool: .censor, color: .black, lineWidth: 0,
                     points: [CGPoint(x: max(r.minX, 0), y: max(r.minY, 0)),
                              CGPoint(x: min(r.maxX, 1), y: min(r.maxY, 1))])
                 annotations.append(a)
@@ -678,14 +756,10 @@ struct EditorView: View {
             redoStack.removeAll(); clearedBackup = nil
             redactedMatches = found // giữ lại để ⌘Z còn biết vừa che mất những gì
             pendingMatches = []; redactHint = 0
-            status = "Blurred \(found.count) item\(found.count == 1 ? "" : "s") "
+            status = "Blacked out \(found.count) item\(found.count == 1 ? "" : "s") "
                    + "(\(SensitiveScanner.summary(found))) — ⌘Z to undo, or Select + ⌫ for one"
         }
     }
-
-    // Độ mờ cố định cho redact: bán kính ≈ 4.8% bề ngang ảnh, chữ tan hẳn.
-    // Không lấy theo lineWidth trên toolbar vì "Thin" mờ nhẹ quá, đọc lại được.
-    private static let redactStrength: CGFloat = 0.012
 
     private var undoButton: some View {
         Button { undo() } label: {
@@ -696,7 +770,6 @@ struct EditorView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
         .disabled(annotations.isEmpty)
         .help("Undo")
     }
@@ -711,7 +784,6 @@ struct EditorView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
         .disabled(annotations.isEmpty)
         .help("Clear all annotations")
     }
@@ -1093,6 +1165,14 @@ struct EditorView: View {
                 layer.draw(Image(nsImage: blurred).interpolation(.high),
                            in: CGRect(origin: .zero, size: s))
             }
+        case .censor:
+            // Ô ĐẶC, không phải blur. Làm mờ vẫn là biến đổi từ pixel gốc — đủ
+            // mạnh thì không đọc lại được, nhưng nó vẫn *là* dữ liệu cũ. Tô đè
+            // một màu phẳng thì cái nằm dưới không còn trong file xuất ra nữa.
+            let r = rect(start, end)
+            guard r.width > 0, r.height > 0 else { return }
+            ctx.fill(Path(roundedRect: r, cornerRadius: min(3, min(r.width, r.height) / 6)),
+                     with: .color(a.color))
         case .pen:
             var p = Path(); p.move(to: start)
             for pt in a.points.dropFirst() { p.addLine(to: P(pt)) }
