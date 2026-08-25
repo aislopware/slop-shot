@@ -147,6 +147,8 @@ private struct PrivacyTab: View {
 
     var body: some View {
         Form {
+            PermissionsSection()
+
             Section("Sensitive data") {
                 Toggle("Scan captures for sensitive data", isOn: $settings.redactScanOnOpen)
                 Text("The editor counts emails, phone numbers, card numbers with their CVV, expiry and cardholder name, API tokens, labelled passwords and ID numbers it can see, and offers to cover them. Nothing is covered until you press Redact.")
@@ -169,6 +171,71 @@ private struct PrivacyTab: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Danh sách quyền hệ thống.
+//
+// macOS chỉ hỏi xin quyền MỘT lần cho mỗi bản app. Lỡ bấm Deny thì từ đó app
+// câm lặng — chụp ra ảnh trắng, Auto scroll bấm không nhúc nhích — mà không
+// có chỗ nào trong app để biết là do quyền, càng không có đường bật lại.
+// Khối này là chỗ đó: nhìn phát biết cái nào tắt, bấm một nút là sang thẳng
+// đúng trang trong System Settings.
+// ─────────────────────────────────────────────────────────────────────────
+private struct PermissionsSection: View {
+    /// Không hỏi được "quyền vừa đổi" bằng notification nào cả — người dùng gạt
+    /// công tắc ở app khác. Nên: hỏi lại mỗi 2s lúc cửa sổ này mở, và hỏi ngay
+    /// khi họ bấm quay lại SlopShot (đường đi thường gặp nhất).
+    private let tick = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+    @State private var granted: [SystemPermission: Bool] = [:]
+
+    var body: some View {
+        Section("Permissions") {
+            ForEach(SystemPermission.allCases) { p in
+                row(p)
+            }
+        }
+        .onAppear(perform: refresh)
+        .onReceive(tick) { _ in refresh() }
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.didBecomeActiveNotification)) { _ in refresh() }
+    }
+
+    @ViewBuilder
+    private func row(_ p: SystemPermission) -> some View {
+        let ok = granted[p] ?? p.isGranted
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Image(systemName: p.icon)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(p.title)
+                    Text(p.purpose).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                Label(ok ? "Granted" : "Not granted",
+                      systemImage: ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .font(.caption).bold()
+                    .foregroundStyle(ok ? Color.green : Color.orange)
+                    .labelStyle(.titleAndIcon)
+                Button("Open…") { p.openSystemSettings() }
+            }
+            // Screen Recording bật xong vẫn chưa dùng được: macOS chỉ cấp cho
+            // tiến trình MỚI. Không nói ra thì người ta bật rồi chụp tiếp, vẫn
+            // trắng, và tưởng cái danh sách này nói dối.
+            if p.needsRelaunch, !ok {
+                Text("Turn it on, then quit and reopen SlopShot — macOS only hands this permission to a freshly launched app.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func refresh() {
+        for p in SystemPermission.allCases { granted[p] = p.isGranted }
     }
 }
 
