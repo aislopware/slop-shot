@@ -9,6 +9,9 @@ struct HistoryItem: Identifiable, Codable {
     var fileURL: URL?      // ảnh/video (nil nếu là text)
     var text: String?      // nội dung OCR (chỉ với kind == .text)
     var subtitle: String   // "1440×900" / "0:12" / "142 chars"
+    // Chữ đọc được TRONG ảnh chụp, OCR ngầm sau khi chụp — chỉ để tìm kiếm,
+    // không hiện ra. Optional nên history.json cũ (chưa có khoá này) vẫn đọc được.
+    var ocrText: String?
 
     // Tên hiển thị theo loại.
     var title: String {
@@ -20,6 +23,36 @@ struct HistoryItem: Identifiable, Codable {
         }
     }
     var thumbFileName: String { id.uuidString + ".png" }
+
+    /// File gốc còn nằm đó không. Ảnh nằm ở thư mục tạm nên macOS có thể dọn mất,
+    /// trong khi thumbnail + chữ đã index thì vẫn còn → dòng đó vẫn tìm ra được,
+    /// chỉ là hết Edit/Save.
+    var fileExists: Bool {
+        guard let fileURL else { return false }
+        return FileManager.default.fileExists(atPath: fileURL.path)
+    }
+
+    // ── Tìm kiếm ───────────────────────────────────────────────────────────
+    /// `q` đã lowercase sẵn. So khớp bỏ qua cả dấu — gõ "loi" vẫn ra "lỗi",
+    /// vì gõ tiếng Việt có dấu chỉ để tìm một dòng log thì mệt.
+    static let searchOptions: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
+
+    func matches(_ q: String) -> Bool {
+        func has(_ s: String?) -> Bool {
+            s?.range(of: q, options: Self.searchOptions) != nil
+        }
+        return has(title) || has(subtitle) || has(text) || has(ocrText)
+    }
+
+    /// Đoạn chữ quanh chỗ khớp, để hiện ngay dưới dòng kết quả.
+    func snippet(for q: String, radius: Int = 34) -> String? {
+        let hay = [text, ocrText].compactMap { $0 }.joined(separator: " · ")
+        guard let r = hay.range(of: q, options: Self.searchOptions) else { return nil }
+        let lo = hay.index(r.lowerBound, offsetBy: -radius, limitedBy: hay.startIndex) ?? hay.startIndex
+        let hi = hay.index(r.upperBound, offsetBy: radius, limitedBy: hay.endIndex) ?? hay.endIndex
+        let core = hay[lo..<hi].replacingOccurrences(of: "\n", with: " ")
+        return (lo > hay.startIndex ? "…" : "") + core + (hi < hay.endIndex ? "…" : "")
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -31,7 +64,9 @@ final class CaptureHistory: ObservableObject {
     static let shared = CaptureHistory()
 
     @Published private(set) var items: [HistoryItem] = []
-    private let maxItems = 40
+    // Giữ nhiều hơn hẳn kể từ khi có tìm kiếm — lục 40 mục thì cuộn tay còn nhanh
+    // hơn gõ. Chi phí đĩa vẫn nhẹ: mỗi mục chỉ là 1 thumbnail 240px + ít chữ.
+    private let maxItems = 100
     private var thumbCache: [UUID: NSImage] = [:]   // cache để khỏi đọc đĩa liên tục
 
     private let dir: URL
@@ -49,13 +84,33 @@ final class CaptureHistory: ObservableObject {
     }
 
     // ── Thêm 1 mục mới (gọi sau mỗi lần chụp/quay/OCR) ─────────────────────
+    // `image` là ảnh ĐẦY ĐỦ (không phải thumbnail): store tự thu nhỏ để lưu đĩa,
+    // và OCR trên bản full-res để index — OCR ảnh 240px thì ra rác.
     func add(kind: HistoryItem.Kind, fileURL: URL?, text: String?,
-             subtitle: String, thumbnail: NSImage?) {
+             subtitle: String, image: NSImage?) {
         let item = HistoryItem(id: UUID(), kind: kind, date: Date(),
                                fileURL: fileURL, text: text, subtitle: subtitle)
-        if let thumbnail { writeThumb(thumbnail, for: item) }
+        if let image { writeThumb(image, for: item) }
         items.insert(item, at: 0)        // mới nhất lên đầu
         trim()
+        save()
+        if kind == .image, let image { indexText(of: image, for: item.id) }
+    }
+
+    // OCR ngầm rồi gắn chữ vào mục → sau này tìm ảnh cũ bằng nội dung trong ảnh.
+    // Chạy nền, xong lúc nào cập nhật lúc đó; người dùng không phải chờ.
+    private func indexText(of image: NSImage, for id: UUID) {
+        guard AppSettings.shared.indexCaptureText, let cg = ImageOps.cg(image) else { return }
+        Task { [weak self] in
+            let text = await TextRecognizer.recognize(in: cg)
+            guard !text.isEmpty else { return }
+            self?.attachOCR(text, to: id)
+        }
+    }
+
+    private func attachOCR(_ text: String, to id: UUID) {
+        guard let i = items.firstIndex(where: { $0.id == id }) else { return }  // đã bị trim/xoá
+        items[i].ocrText = text
         save()
     }
 

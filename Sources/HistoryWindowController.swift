@@ -55,6 +55,17 @@ final class HistoryWindowController {
 private struct HistoryView: View {
     @ObservedObject var history: CaptureHistory
     let actions: HistoryActions
+    @State private var query = ""
+    @FocusState private var searchFocused: Bool
+
+    // Chuỗi tìm đã chuẩn hoá; rỗng = không lọc.
+    private var normalized: String {
+        query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+    private var shown: [HistoryItem] {
+        let q = normalized
+        return q.isEmpty ? history.items : history.items.filter { $0.matches(q) }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -77,7 +88,38 @@ private struct HistoryView: View {
                 .disabled(history.items.isEmpty)
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+
+            // Ô tìm kiếm: gõ chữ NẰM TRONG ảnh cũng ra, vì mỗi ảnh chụp đều được
+            // OCR ngầm rồi index (xem CaptureHistory.indexText).
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                TextField("Search text inside captures…", text: $query)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .focused($searchFocused)
+                if !query.isEmpty {
+                    Button { query = "" } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(Color(nsColor: .controlBackgroundColor),
+                        in: RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color(nsColor: .separatorColor), lineWidth: 1))
+            .padding(.horizontal, 16)
+            .padding(.bottom, 10)
+            // ⎋ để xoá ô tìm thay vì đóng cửa sổ.
+            .onExitCommand { query = "" }
 
             Divider()
 
@@ -96,12 +138,29 @@ private struct HistoryView: View {
                         .frame(maxWidth: 260)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if shown.isEmpty {
+                // Có lịch sử nhưng không khớp từ khoá.
+                VStack(spacing: 8) {
+                    Image(systemName: "text.magnifyingglass")
+                        .font(.system(size: 30))
+                        .foregroundStyle(.tertiary)
+                    Text("No captures match “\(query)”")
+                        .foregroundStyle(.secondary)
+                    Text("Search looks at the text SlopShot read inside each screenshot.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 260)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(history.items) { item in
+                        ForEach(shown) { item in
                             HistoryRow(item: item,
                                        thumbnail: history.thumbnail(for: item),
+                                       snippet: normalized.isEmpty
+                                                ? nil : item.snippet(for: normalized),
                                        actions: actions)
                             Divider().padding(.leading, 84)
                         }
@@ -117,6 +176,7 @@ private struct HistoryView: View {
 private struct HistoryRow: View {
     let item: HistoryItem
     let thumbnail: NSImage?
+    let snippet: String?          // đoạn chữ khớp từ khoá (nil khi không tìm kiếm)
     let actions: HistoryActions
     @State private var hovering = false
 
@@ -152,21 +212,35 @@ private struct HistoryRow: View {
                 Text("\(item.subtitle) · \(Self.relative(item.date))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                // Khớp ở chữ trong ảnh → cho thấy khớp chỗ nào, không thì kết quả
+                // trông như trả về bừa.
+                if let snippet {
+                    Text(snippet)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
             }
 
             Spacer()
 
             // Nút thao tác (hiện rõ khi hover cho gọn).
+            // File ảnh nằm ở thư mục tạm; macOS dọn mất thì chỉ còn thumbnail +
+            // chữ đã index — vẫn tìm/xoá được, nhưng Save/Edit thì hết cửa.
             HStack(spacing: 6) {
                 iconButton("doc.on.doc", "Copy") { actions.copy(item) }
-                if item.kind != .text, item.kind != .color {
+                if item.kind != .text, item.kind != .color, item.fileExists {
                     iconButton("square.and.arrow.down", "Save as…") { actions.saveAs(item) }
                 }
                 switch item.kind {
-                case .image: iconButton("pencil.tip.crop.circle", "Edit") { actions.edit(item) }
-                case .video: iconButton("play.fill", "Play") { actions.open(item) }
-                case .text:  iconButton("character.bubble", "Open & translate") { actions.edit(item) }
-                case .color: EmptyView()   // chép mã màu là xong, không có gì để mở
+                case .image where item.fileExists:
+                    iconButton("pencil.tip.crop.circle", "Edit") { actions.edit(item) }
+                case .video where item.fileExists:
+                    iconButton("play.fill", "Play") { actions.open(item) }
+                case .text:
+                    iconButton("character.bubble", "Open & translate") { actions.edit(item) }
+                default:
+                    EmptyView()   // màu: chép mã là xong; file mất: không mở được nữa
                 }
                 iconButton("trash", "Delete") { actions.delete(item) }
             }

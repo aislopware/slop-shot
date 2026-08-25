@@ -133,6 +133,8 @@ final class AppSettings: ObservableObject {
     // Mở editor thì tự dò email/số thẻ/token trong ảnh và MÁCH có bao nhiêu cái —
     // không tự bôi. Bôi hay không là do người bấm nút Redact.
     @Published var redactScanOnOpen: Bool  { didSet { d.set(redactScanOnOpen, forKey: K.redact) } }
+    // OCR ngầm mỗi ảnh chụp rồi lưu chữ vào lịch sử → tìm ảnh cũ bằng nội dung.
+    @Published var indexCaptureText: Bool  { didSet { d.set(indexCaptureText, forKey: K.index) } }
 
     // Không lưu UserDefaults — SMAppService.mainApp.status mới là nguồn sự thật
     // (user có thể tắt thủ công trong System Settings > Login Items).
@@ -189,7 +191,7 @@ final class AppSettings: ObservableObject {
         static let folder = "save.folder", copy = "save.copy"
         static let thumb = "save.thumb", format = "save.format", hotkeys = "hotkeys"
         static let snap = "select.snap", color = "pick.color.format"
-        static let redact = "editor.redact.scan"
+        static let redact = "editor.redact.scan", index = "history.index.text"
     }
 
     private init() {
@@ -203,6 +205,7 @@ final class AppSettings: ObservableObject {
         snapToEdges     = (d.object(forKey: K.snap) as? Bool) ?? true
         colorFormat     = ColorFormat(rawValue: d.string(forKey: K.color) ?? "hex") ?? .hex
         redactScanOnOpen = (d.object(forKey: K.redact) as? Bool) ?? true
+        indexCaptureText = (d.object(forKey: K.index) as? Bool) ?? true
         if let raw = d.data(forKey: K.hotkeys),
            let saved = try? JSONDecoder().decode([String: Hotkey].self, from: raw) {
             hotkeyStore = saved

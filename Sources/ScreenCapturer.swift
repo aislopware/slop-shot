@@ -194,7 +194,7 @@ final class ScreenCapturer: ObservableObject {
             pb.setString(copyText, forType: .string)
             let count = copyText.count
             history.add(kind: .text, fileURL: nil, text: copyText,
-                        subtitle: "\(count) chars", thumbnail: nil)
+                        subtitle: "\(count) chars", image: nil)
 
             // Hiện cửa sổ kết quả: đối chiếu ảnh ↔ chữ, sửa tay, dịch.
             let preview = NSImage(cgImage: cropped,
@@ -236,7 +236,7 @@ final class ScreenCapturer: ObservableObject {
         pb.setString(text, forType: .string)
 
         history.add(kind: .color, fileURL: nil, text: text,
-                    subtitle: OverlayChrome.hex(of: color), thumbnail: swatch(color))
+                    subtitle: OverlayChrome.hex(of: color), image: swatch(color))
         lastStatus = "\u{2705} Copied \(text) to clipboard."
     }
 
@@ -405,7 +405,7 @@ final class ScreenCapturer: ObservableObject {
 
         // Ghi vào lịch sử (kèm thời lượng).
         history.add(kind: .video, fileURL: url, text: nil,
-                    subtitle: await videoDuration(url), thumbnail: poster)
+                    subtitle: await videoDuration(url), image: poster)
 
         guard settings.showThumbnail else { return }
         thumbnail.show(
@@ -515,7 +515,7 @@ final class ScreenCapturer: ObservableObject {
         lastSavedURL = url
 
         // 3) Ghi vào lịch sử.
-        history.add(kind: .image, fileURL: url, text: nil, subtitle: subtitle, thumbnail: nsImage)
+        history.add(kind: .image, fileURL: url, text: nil, subtitle: subtitle, image: nsImage)
 
         // 4) Trạng thái.
         lastStatus = settings.copyToClipboard
@@ -591,6 +591,12 @@ final class ScreenCapturer: ObservableObject {
         pb.clearContents()
         if item.kind == .text, let text = item.text {
             pb.setString(text, forType: .string)
+        } else if !item.fileExists, let ocr = item.ocrText {
+            // File tạm đã bị dọn nhưng chữ trong ảnh vẫn còn index → chép chữ,
+            // vẫn hơn là chép ra không khí rồi báo "Copied".
+            pb.setString(ocr, forType: .string)
+            lastStatus = "✅ File is gone — copied the text read from it."
+            return
         } else if let url = item.fileURL {
             if item.kind == .image, let img = NSImage(contentsOf: url) {
                 pb.writeObjects([img, url as NSURL])

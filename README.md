@@ -30,7 +30,8 @@
 - **Sticker store** — packs are **downloaded on demand**, not bundled: **Get packs** in the sticker popover lists what is on the CDN with a cover, sticker count and size, and pulls the one you pick (checksum-verified) straight into your library. Keeps the app a few MB instead of a few hundred. It is only static files behind an R2 bucket — point it somewhere else with `defaults write com.thanglb.slopshot stickerStoreURL "https://…"`, and publish your own with `tools/publish_packs.swift`.
 - **Floating preview card** — Copy / Save / Share / Pin, drag-out to other apps.
 - **Video editor** — Quick Look (in-app player) plus a full editor built around a lane-based timeline: **trim** handles on a filmstrip, **cut** stretches out of the middle, **speed** ramps (0.25×–10×), **freeze** frames, eased **zoom**, **blur/pixelate censor** regions, and **text** captions. Press a tool and the effect drops in at the playhead — drag the pill along its lane to move it, its edges to stretch it, and the box straight on the video to aim it. Two effects on the same lane can never overlap: they stop against each other, or slide to the nearest gap. **Auto Zoom** turns the clicks you made while recording into zoom-ins in one press. Preview and export share one Core Image composition, so what you see is exactly what lands in the file. Exports MOV / MP4 / GIF with separate Quality, Resolution and FPS controls (a plain trim still takes the lossless passthrough path).
-- **Capture history**, **settings**, and configurable **global hotkeys**.
+- **Searchable capture history** — every screenshot is OCR'd in the background, so the history window is searchable by what is *written inside the picture*: type `staging.env` or an error message and the shot comes back. The last 100 captures are kept; a row whose temp file the OS has since swept still keeps its thumbnail and its text.
+- **Settings** and configurable **global hotkeys**.
 
 ## Install
 

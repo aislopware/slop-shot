@@ -94,9 +94,13 @@ private struct DestinationTab: View {
                 Toggle("Show preview thumbnail", isOn: $settings.showThumbnail)
             }
 
-            Section("Privacy") {
+            Section("Privacy & search") {
                 Toggle("Scan captures for sensitive data", isOn: $settings.redactScanOnOpen)
                 Text("The editor counts emails, phone numbers, card numbers and API tokens it can see, and offers to blur them. Nothing is blurred until you press Redact.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Toggle("Index text inside screenshots", isOn: $settings.indexCaptureText)
+                Text("Reads each screenshot in the background so History can be searched by what's written in the image. Runs on-device — nothing leaves your Mac.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
