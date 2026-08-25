@@ -93,6 +93,13 @@ private struct DestinationTab: View {
                 Toggle("Also copy to clipboard", isOn: $settings.copyToClipboard)
                 Toggle("Show preview thumbnail", isOn: $settings.showThumbnail)
             }
+
+            Section("Privacy") {
+                Toggle("Scan captures for sensitive data", isOn: $settings.redactScanOnOpen)
+                Text("The editor counts emails, phone numbers, card numbers and API tokens it can see, and offers to blur them. Nothing is blurred until you press Redact.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Section {
                 Text("Captures are kept temporarily until you click Save on the preview — then they're written to the folder above.")
                     .font(.caption)

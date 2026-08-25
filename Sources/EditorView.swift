@@ -103,6 +103,13 @@ struct EditorView: View {
     @State private var showStickerPopover = false
     @State private var animStart = Date()      // mốc 0 của mọi layer động
     @State private var exporting = false       // đang dựng GIF (chặn bấm chồng)
+    // ── Redact (bôi dữ liệu nhạy cảm) ─────────────────────────────────────
+    @State private var pendingMatches: [SensitiveMatch] = []  // kết quả dò sẵn lúc mở
+    @State private var redactHint = 0          // >0 → chấm đỏ trên nút Redact
+    @State private var scanning = false        // đang dò (chặn bấm chồng)
+    // Lô ô blur của LẦN redact gần nhất — để ⌘Z gỡ cả loạt chứ không từng cái.
+    @State private var redactBatch: Set<UUID> = []
+    @State private var redoBatch: Set<UUID> = []
     @FocusState private var textFocused: Bool
 
     init(image: NSImage, sourceURL: URL?, onClose: (() -> Void)? = nil) {
@@ -151,6 +158,7 @@ struct EditorView: View {
         .ignoresSafeArea()
         .onAppear { installKeyMonitor() }
         .onDisappear { removeKeyMonitor() }
+        .task { await scanForSensitiveData() }
     }
 
     // ── ⌘Z undo / ⌘⇧Z redo cho annotation ─────────────────────────────────
@@ -159,6 +167,14 @@ struct EditorView: View {
     // (qua Edit menu). Ngược lại tự undo/redo nét vẽ rồi "nuốt" event (return nil).
     private func installKeyMonitor() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // ⌫ / ⌦ xoá layer đang chọn. Đứng TRƯỚC guard .command vì hai phím này
+            // không đi kèm modifier. Đang gõ trong ô Text thì để nó xoá chữ.
+            if event.keyCode == 51 || event.keyCode == 117,
+               !event.modifierFlags.contains(.command),
+               editingID == nil, selectedID != nil {
+                deleteSelected()
+                return nil
+            }
             guard event.modifierFlags.contains(.command) else { return event }
             let key = event.charactersIgnoringModifiers?.lowercased()
             // ⌘V: đang gõ chữ → để hệ thống paste VĂN BẢN; ngược lại thử dán ẢNH.
@@ -244,13 +260,45 @@ struct EditorView: View {
             status = ""
             return
         }
-        guard !annotations.isEmpty else { return }
+        guard let last = annotations.last else { return }
+        // Nét trên cùng thuộc lô redact → gỡ NGUYÊN lô. Bôi 6 chỗ một phát mà bắt
+        // bấm ⌘Z sáu lần thì vô duyên.
+        if redactBatch.contains(last.id) {
+            let batch = annotations.filter { redactBatch.contains($0.id) }
+            annotations.removeAll { redactBatch.contains($0.id) }
+            redoStack.append(contentsOf: batch)
+            redoBatch = redactBatch
+            redactBatch = []
+            status = "Removed \(batch.count) redaction\(batch.count == 1 ? "" : "s")"
+            return
+        }
         redoStack.append(annotations.removeLast())
     }
 
     private func redo() {
-        guard !redoStack.isEmpty else { return }
+        guard let last = redoStack.last else { return }
+        if redoBatch.contains(last.id) {                 // đối xứng với undo ở trên
+            let batch = redoStack.filter { redoBatch.contains($0.id) }
+            redoStack.removeAll { redoBatch.contains($0.id) }
+            annotations.append(contentsOf: batch)
+            redactBatch = redoBatch
+            redoBatch = []
+            return
+        }
         annotations.append(redoStack.removeLast())
+    }
+
+    // Xoá layer đang chọn (⌫). Đây là đường thoát khi Redact bôi nhầm một ô:
+    // đổi sang Select, bấm vào ô đó, ⌫.
+    private func deleteSelected() {
+        guard let id = selectedID,
+              let idx = annotations.firstIndex(where: { $0.id == id }) else { return }
+        let removed = annotations.remove(at: idx)
+        redoStack.append(removed)
+        redoBatch.remove(id)        // xoá lẻ thì nó không còn thuộc lô nào nữa
+        redactBatch.remove(id)
+        selectedID = nil
+        status = "Deleted \(removed.tool.label.lowercased()) layer"
     }
 
     // Xóa SẠCH annotation trong 1 lần (đỡ phải Undo từng nét). Lưu lại loạt vừa
@@ -261,6 +309,7 @@ struct EditorView: View {
         clearedBackup = annotations
         annotations = []
         redoStack = []
+        redactBatch = []; redoBatch = []
         selectedID = nil
         editingID = nil
         current = nil
@@ -355,6 +404,7 @@ struct EditorView: View {
             colorControl
             widthControl
             stickerControl
+            redactButton
             undoButton
             clearButton
             imageTransformControls   // luôn hiện: có chọn ảnh→đổi ảnh đó, không→đổi ảnh nền
@@ -535,6 +585,90 @@ struct EditorView: View {
         .foregroundStyle(Color(white: 0.85))
         .help(tip)
     }
+
+    // ── Redact: dò email/điện thoại/số thẻ/token rồi úp ô blur lên ────────
+    // Chấm cam = lúc mở editor đã dò thấy sẵn, chỉ chờ bấm.
+    private var redactButton: some View {
+        Button { haptic(); redactNow() } label: {
+            Image(systemName: scanning ? "hourglass" : "eye.slash")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(redactHint > 0 ? Color.orange : Color(white: 0.85))
+                .frame(width: 32, height: 30)
+                .contentShape(Rectangle())
+                .overlay(alignment: .topTrailing) {
+                    if redactHint > 0 {
+                        Text("\(redactHint)")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4).padding(.vertical, 1)
+                            .background(Capsule().fill(Color.orange))
+                            .offset(x: 4, y: -1)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+        .disabled(scanning)
+        .help(redactHint > 0
+              ? "Redact — \(redactHint) sensitive item\(redactHint == 1 ? "" : "s") found"
+              : "Redact — find & blur emails, phone numbers, card numbers and tokens")
+    }
+
+    // Dò lúc mở editor: KHÔNG bôi gì cả, chỉ đếm rồi mách. Tự sửa ảnh của người
+    // ta sau lưng là kiểu hành xử không nên có.
+    private func scanForSensitiveData() async {
+        guard AppSettings.shared.redactScanOnOpen,
+              pendingMatches.isEmpty, let cg = ImageOps.cg(image) else { return }
+        let found = await SensitiveScanner.scan(in: cg)
+        guard !found.isEmpty else { return }
+        pendingMatches = found
+        redactHint = found.count
+        status = "\(found.count) sensitive item\(found.count == 1 ? "" : "s") "
+               + "(\(SensitiveScanner.summary(found))) — hit Redact to blur"
+    }
+
+    private func redactNow() {
+        guard !scanning, let cg = ImageOps.cg(image) else { return }
+        // Bấm Redact lần hai: lớp blur không nằm trong ảnh gốc nên dò lại vẫn ra
+        // đúng ngần ấy chỗ và đắp chồng thêm một lô nữa. Chặn ở đây.
+        if !redactBatch.isEmpty, redactBatch.isSubset(of: Set(annotations.map(\.id))) {
+            status = "Already redacted — ⌘Z to take it back out"
+            return
+        }
+        scanning = true
+        Task { @MainActor in
+            defer { scanning = false }
+            // Dùng lại kết quả dò lúc mở nếu còn hợp lệ; không thì dò lại.
+            let found = pendingMatches.isEmpty ? await SensitiveScanner.scan(in: cg) : pendingMatches
+            guard !found.isEmpty else {
+                status = "No emails, phone numbers, card numbers or tokens found"
+                redactHint = 0
+                return
+            }
+            var ids: Set<UUID> = []
+            for m in found {
+                // Nới khung ra một chút: OCR bám sát chữ, mờ đúng khít vẫn còn
+                // đọc được mấy nét thò ra ngoài.
+                let r = m.rect.insetBy(dx: -0.004, dy: -0.006)
+                let a = Annotation(
+                    tool: .blur, color: .clear, lineWidth: Self.redactStrength,
+                    points: [CGPoint(x: max(r.minX, 0), y: max(r.minY, 0)),
+                             CGPoint(x: min(r.maxX, 1), y: min(r.maxY, 1))])
+                annotations.append(a)
+                ids.insert(a.id)
+            }
+            redactBatch = ids       // chỉ lô MỚI NHẤT được gỡ nguyên cụm bằng ⌘Z
+            redoBatch = []
+            redoStack.removeAll(); clearedBackup = nil
+            pendingMatches = []; redactHint = 0
+            status = "Blurred \(found.count) item\(found.count == 1 ? "" : "s") "
+                   + "(\(SensitiveScanner.summary(found))) — ⌘Z to undo, or Select + ⌫ for one"
+        }
+    }
+
+    // Độ mờ cố định cho redact: bán kính ≈ 4.8% bề ngang ảnh, chữ tan hẳn.
+    // Không lấy theo lineWidth trên toolbar vì "Thin" mờ nhẹ quá, đọc lại được.
+    private static let redactStrength: CGFloat = 0.012
 
     private var undoButton: some View {
         Button { undo() } label: {
@@ -744,6 +878,7 @@ struct EditorView: View {
         guard let cg = ImageOps.cg(image),
               let out = ImageOps.flip(cg, horizontal: horizontal) else { return }
         image = ImageOps.ns(out, scale: image.size.width / CGFloat(cg.width))
+        pendingMatches = []      // toạ độ dò sẵn lệch hết sau khi lật → dò lại từ đầu
         for i in annotations.indices {
             annotations[i].points = annotations[i].points.map {
                 horizontal ? CGPoint(x: 1 - $0.x, y: $0.y) : CGPoint(x: $0.x, y: 1 - $0.y)
@@ -759,6 +894,7 @@ struct EditorView: View {
         guard let cg = ImageOps.cg(image),
               let out = ImageOps.rotate90(cg, clockwise: clockwise) else { return }
         image = ImageOps.ns(out, scale: image.size.width / CGFloat(cg.width))
+        pendingMatches = []      // như flipBase: xoay xong toạ độ cũ vô nghĩa
         for i in annotations.indices {
             annotations[i].points = annotations[i].points.map {
                 clockwise ? CGPoint(x: 1 - $0.y, y: $0.x) : CGPoint(x: $0.y, y: 1 - $0.x)

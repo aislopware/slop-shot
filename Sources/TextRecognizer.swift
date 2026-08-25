@@ -58,6 +58,26 @@ enum TextRecognizer {
         }
     }
 
+    // Từng dòng chữ ở dạng VNRecognizedText — giữ nguyên object của Vision (chứ
+    // không chỉ lấy .string) vì chỉ nó mới hỏi được "đoạn con này nằm ở khung nào"
+    // qua boundingBox(for:). SensitiveScanner cần đúng cái đó để úp ô blur.
+    static func lines(in cgImage: CGImage) async -> [VNRecognizedText] {
+        await withCheckedContinuation { cont in
+            let request = VNRecognizeTextRequest { req, _ in
+                cont.resume(returning: (req.results as? [VNRecognizedTextObservation] ?? [])
+                    .compactMap { $0.topCandidates(1).first })
+            }
+            request.recognitionLevel = .accurate
+            request.usesLanguageCorrection = true
+            request.automaticallyDetectsLanguage = true
+
+            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+            DispatchQueue.global(qos: .userInitiated).async {
+                do { try handler.perform([request]) } catch { cont.resume(returning: []) }
+            }
+        }
+    }
+
     // Mã QR trong vùng chụp (rẻ, chạy chung 1 lượt với OCR cho tiện).
     private static func detectQRCodes(in cgImage: CGImage) -> [String] {
         let request = VNDetectBarcodesRequest()

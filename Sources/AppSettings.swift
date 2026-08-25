@@ -130,6 +130,9 @@ final class AppSettings: ObservableObject {
     @Published var snapToEdges: Bool       { didSet { d.set(snapToEdges, forKey: K.snap) } }
     // Kiểu chuỗi màu Color Picker chép ra (đổi được ngay lúc đang chọn bằng ← →).
     @Published var colorFormat: ColorFormat { didSet { d.set(colorFormat.rawValue, forKey: K.color) } }
+    // Mở editor thì tự dò email/số thẻ/token trong ảnh và MÁCH có bao nhiêu cái —
+    // không tự bôi. Bôi hay không là do người bấm nút Redact.
+    @Published var redactScanOnOpen: Bool  { didSet { d.set(redactScanOnOpen, forKey: K.redact) } }
 
     // Không lưu UserDefaults — SMAppService.mainApp.status mới là nguồn sự thật
     // (user có thể tắt thủ công trong System Settings > Login Items).
@@ -186,6 +189,7 @@ final class AppSettings: ObservableObject {
         static let folder = "save.folder", copy = "save.copy"
         static let thumb = "save.thumb", format = "save.format", hotkeys = "hotkeys"
         static let snap = "select.snap", color = "pick.color.format"
+        static let redact = "editor.redact.scan"
     }
 
     private init() {
@@ -198,6 +202,7 @@ final class AppSettings: ObservableObject {
         imageFormat     = ImageFormat(rawValue: d.string(forKey: K.format) ?? "png") ?? .png
         snapToEdges     = (d.object(forKey: K.snap) as? Bool) ?? true
         colorFormat     = ColorFormat(rawValue: d.string(forKey: K.color) ?? "hex") ?? .hex
+        redactScanOnOpen = (d.object(forKey: K.redact) as? Bool) ?? true
         if let raw = d.data(forKey: K.hotkeys),
            let saved = try? JSONDecoder().decode([String: Hotkey].self, from: raw) {
             hotkeyStore = saved
