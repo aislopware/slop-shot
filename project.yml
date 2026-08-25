@@ -18,7 +18,7 @@ targets:
       path: Support/Info.plist   # XcodeGen tự sinh file plist này
       properties:
         CFBundleDisplayName: SlopShot
-        CFBundleShortVersionString: "0.2.0"
+        CFBundleShortVersionString: "0.3.0"
         LSMinimumSystemVersion: "15.0"
         LSUIElement: true        # app chạy nền: ẩn Dock + ẩn khỏi ⌘Tab
         # Quyền mic phải khai ở ĐÂY, không phải sửa tay Support/Info.plist —
@@ -27,7 +27,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.thanglb.slopshot
-        MARKETING_VERSION: "0.2.0"
+        MARKETING_VERSION: "0.3.0"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "5.0"        # dùng language mode 5 cho nhẹ đầu lúc học
         CODE_SIGN_IDENTITY: "-"     # ad-hoc sign: đủ để chạy local

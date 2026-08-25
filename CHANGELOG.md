@@ -4,6 +4,16 @@ Sinh từ commit log bằng [git-cliff](https://git-cliff.org). Mục nào nằm
 loại (type) của commit quyết định — tức quyết định lúc VIẾT commit, không phải lúc cắt
 release. Quy ước được `scripts/check-commit-msg.sh` chặn ngay ở hook commit-msg.
 
+## [0.3.0](https://github.com/aislopware/slop-shot/compare/v0.2.0...v0.3.0) — 2026-08-25
+
+### Features
+
+- List the macOS permissions with a way to re-enable ([`388632b`](https://github.com/aislopware/slop-shot/commit/388632bd2660d4fd6b9c8592d736831ed9e225c2))
+
+### Documentation
+
+- Mention the permissions list in Settings ([`b8ea524`](https://github.com/aislopware/slop-shot/commit/b8ea52408d4e7f3b90c7538176c8291f0d7472fe))
+
 ## [0.2.0](https://github.com/aislopware/slop-shot/compare/v0.1.0...v0.2.0) — 2026-08-25
 
 ### Features
