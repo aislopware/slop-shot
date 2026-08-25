@@ -589,7 +589,9 @@ final class ScreenCapturer: ObservableObject {
     private func historyCopy(_ item: HistoryItem) {
         let pb = NSPasteboard.general
         pb.clearContents()
-        if item.kind == .text, let text = item.text {
+        // .color cũng cất mã màu trong `text` — thiếu nó thì bấm Copy ở dòng màu
+        // chẳng chép gì mà vẫn báo "đã chép".
+        if item.kind == .text || item.kind == .color, let text = item.text {
             pb.setString(text, forType: .string)
         } else if !item.fileExists, let ocr = item.ocrText {
             // File tạm đã bị dọn nhưng chữ trong ảnh vẫn còn index → chép chữ,
