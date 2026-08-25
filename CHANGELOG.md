@@ -4,6 +4,24 @@ Sinh từ commit log bằng [git-cliff](https://git-cliff.org). Mục nào nằm
 loại (type) của commit quyết định — tức quyết định lúc VIẾT commit, không phải lúc cắt
 release. Quy ước được `scripts/check-commit-msg.sh` chặn ngay ở hook commit-msg.
 
+## [0.2.0](https://github.com/aislopware/slop-shot/compare/v0.1.0...v0.2.0) — 2026-08-25
+
+### Features
+
+- Blur the emails, tokens and card numbers it can see ([`e03548e`](https://github.com/aislopware/slop-shot/commit/e03548ed7bfca99e4df7222250514a730a8b7018))
+- Search captures by the text written inside them ([`d30b590`](https://github.com/aislopware/slop-shot/commit/d30b590c45beba0ea880fa48c6d1b55fbf63e56b))
+- Redact the rest of the card, not just its number ([`4bf16cf`](https://github.com/aislopware/slop-shot/commit/4bf16cf7a0cd22b88b075259c2b20a2a05e211e0))
+- Cover redactions with a solid black box, not a blur ([`1bdb9b0`](https://github.com/aislopware/slop-shot/commit/1bdb9b04930a1ca4c674e30d562f535dfe023a35))
+
+### Bug fixes
+
+- Copy the hex when Copy is pressed on a colour row ([`8c927ab`](https://github.com/aislopware/slop-shot/commit/8c927ab2f13357e7a0f13d266557753673721e6b))
+- Warn again when ⌘Z pulls the redactions back off ([`ecef891`](https://github.com/aislopware/slop-shot/commit/ecef891a98b6a31371f537642172141f0509d4bf))
+- Split the overloaded Settings tab and un-dim History buttons ([`61638e3`](https://github.com/aislopware/slop-shot/commit/61638e38e36057f5f29a17f21d0ba0abf1c92083))
+- Don't let escape close the window mid-export ([`d0bb710`](https://github.com/aislopware/slop-shot/commit/d0bb7106b8b7210d6961e741b36a973c3214f8d3))
+- Only look for a cardholder name on the card itself ([`ea63cc3`](https://github.com/aislopware/slop-shot/commit/ea63cc396ecfbbf974dfa1a35ef37b9a7d394455))
+- Widen the window so all five tabs fit ([`da44bea`](https://github.com/aislopware/slop-shot/commit/da44bea90b26736763a47183b390ba472afa43cb))
+
 ## [0.1.0](https://github.com/aislopware/slop-shot/releases/tag/v0.1.0) — 2026-08-18
 
 ### Documentation
