@@ -37,19 +37,26 @@ private struct SettingsView: View {
 
     var body: some View {
         TabView {
-            DestinationTab(settings: settings)
-                .tabItem { Label("Destination", systemImage: "folder") }
+            GeneralTab(settings: settings)
+                .tabItem { Label("General", systemImage: "gearshape") }
+            CaptureTab(settings: settings)
+                .tabItem { Label("Capture", systemImage: "camera.viewfinder") }
+            PrivacyTab(settings: settings)
+                .tabItem { Label("Privacy", systemImage: "hand.raised") }
             ShortcutsTab(settings: settings)
                 .tabItem { Label("Shortcuts", systemImage: "keyboard") }
             AboutTab()
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
-        .frame(width: 460, height: 360)
+        .frame(width: 480, height: 380)
     }
 }
 
-// ── Tab Destination ────────────────────────────────────────────────────────
-private struct DestinationTab: View {
+// ── Tab General ────────────────────────────────────────────────────────────
+// Tab cũ tên "Destination" nhưng nhét cả startup, selection, color picker,
+// after-capture, privacy, image format vào — tìm một cái toggle phải đọc hết
+// bảy khối. Tách theo việc: General (app + file), Capture (lúc chụp), Privacy.
+private struct GeneralTab: View {
     @ObservedObject var settings: AppSettings
 
     var body: some View {
@@ -69,42 +76,6 @@ private struct DestinationTab: View {
                     Spacer()
                     Button("Choose…", action: chooseFolder)
                 }
-            }
-
-            Section("Selection") {
-                Toggle("Snap to window & item edges", isOn: $settings.snapToEdges)
-                Text("Hover to outline the window or item under the cursor, then click to grab it. Hold ⌥ while dragging for a free selection.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("Color picker") {
-                Picker("Copy color as", selection: $settings.colorFormat) {
-                    ForEach(AppSettings.ColorFormat.allCases) { fmt in
-                        Text(fmt.label).tag(fmt)
-                    }
-                }
-                Text("Press ← → while picking to switch format without leaving the screen.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("After capture") {
-                Toggle("Also copy to clipboard", isOn: $settings.copyToClipboard)
-                Toggle("Show preview thumbnail", isOn: $settings.showThumbnail)
-            }
-
-            Section("Privacy & search") {
-                Toggle("Scan captures for sensitive data", isOn: $settings.redactScanOnOpen)
-                Text("The editor counts emails, phone numbers, card numbers and API tokens it can see, and offers to blur them. Nothing is blurred until you press Redact.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Toggle("Index text inside screenshots", isOn: $settings.indexCaptureText)
-                Text("Reads each screenshot in the background so History can be searched by what's written in the image. Runs on-device — nothing leaves your Mac.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Section {
                 Text("Captures are kept temporarily until you click Save on the preview — then they're written to the folder above.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -132,6 +103,70 @@ private struct DestinationTab: View {
         if panel.runModal() == .OK, let url = panel.url {
             settings.saveFolderPath = url.path
         }
+    }
+}
+
+// ── Tab Capture ────────────────────────────────────────────────────────────
+private struct CaptureTab: View {
+    @ObservedObject var settings: AppSettings
+
+    var body: some View {
+        Form {
+            Section("Selection") {
+                Toggle("Snap to window & item edges", isOn: $settings.snapToEdges)
+                Text("Hover to outline the window or item under the cursor, then click to grab it. Hold ⌥ while dragging for a free selection.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("After capture") {
+                Toggle("Also copy to clipboard", isOn: $settings.copyToClipboard)
+                Toggle("Show preview thumbnail", isOn: $settings.showThumbnail)
+            }
+
+            Section("Color picker") {
+                Picker("Copy color as", selection: $settings.colorFormat) {
+                    ForEach(AppSettings.ColorFormat.allCases) { fmt in
+                        Text(fmt.label).tag(fmt)
+                    }
+                }
+                Text("Press ← → while picking to switch format without leaving the screen.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+// ── Tab Privacy ────────────────────────────────────────────────────────────
+private struct PrivacyTab: View {
+    @ObservedObject var settings: AppSettings
+
+    var body: some View {
+        Form {
+            Section("Sensitive data") {
+                Toggle("Scan captures for sensitive data", isOn: $settings.redactScanOnOpen)
+                Text("The editor counts emails, phone numbers, card numbers with their CVV, expiry and cardholder name, API tokens, labelled passwords and ID numbers it can see, and offers to cover them. Nothing is covered until you press Redact.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Search") {
+                Toggle("Index text inside screenshots", isOn: $settings.indexCaptureText)
+                Text("Reads each screenshot in the background so History can be searched by what's written in the image.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Label("Both run on-device with Apple's Vision framework. No image, and no text read out of one, ever leaves your Mac.",
+                      systemImage: "lock.laptopcomputer")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
     }
 }
 

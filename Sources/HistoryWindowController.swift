@@ -244,7 +244,9 @@ private struct HistoryRow: View {
                 }
                 iconButton("trash", "Delete") { actions.delete(item) }
             }
-            .opacity(hovering ? 1 : 0.55)
+            // 0.55 lúc không hover trông y hệt nút bị disable — nhạt vừa đủ để
+            // dòng đang trỏ nổi lên là được, đừng nhạt tới mức tưởng bấm không ăn.
+            .opacity(hovering ? 1 : 0.85)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
