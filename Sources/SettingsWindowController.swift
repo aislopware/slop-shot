@@ -1,7 +1,9 @@
 import SwiftUI
 
 // ─────────────────────────────────────────────────────────────────────────
-// Cửa sổ Settings: TabView 3 tab (Destination · Shortcuts · About).
+// Cửa sổ Settings: TabView 5 tab (General · Capture · Privacy · Shortcuts · About).
+// Bề ngang phải đủ chứa CẢ 5 tab: hụt một chút là macOS gấp phần thừa vào nút
+// ">>", muốn sang tab khác phải mở menu — thà rộng thêm 150px.
 // ─────────────────────────────────────────────────────────────────────────
 @MainActor
 final class SettingsWindowController {
@@ -14,7 +16,7 @@ final class SettingsWindowController {
             return
         }
         let host = NSHostingController(rootView: SettingsView(settings: settings))
-        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 360),
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 400),
                            styleMask: [.titled, .closable],
                            backing: .buffered, defer: false)
         win.title = "Settings"
@@ -48,7 +50,7 @@ private struct SettingsView: View {
             AboutTab()
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
-        .frame(width: 480, height: 380)
+        .frame(width: 640, height: 400)
     }
 }
 
