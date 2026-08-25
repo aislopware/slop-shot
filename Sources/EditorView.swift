@@ -190,10 +190,13 @@ struct EditorView: View {
             // không phải huỷ. Có nét vẽ thì hỏi lại một nhịp, đừng nuốt mất việc
             // của người ta chỉ vì một phím lỡ tay.
             if event.keyCode == 53, !event.modifierFlags.contains(.command) {
+                // Đang dựng GIF: Done và Save as… đã bị khoá, ⎋ mà đóng luôn cửa
+                // sổ thì cái renderer đang đọc state của nó rơi tự do.
+                if exporting { return nil }
                 // Popover đang mở: trả event lại cho nó tự đóng.
                 if showColorPopover || showWidthPopover || showStickerPopover { return event }
-                if editingID != nil { editingID = nil; textFocused = false; return nil }
-                if selectedID != nil { selectedID = nil; return nil }
+                if editingID != nil { editingID = nil; textFocused = false; escArmed = false; return nil }
+                if selectedID != nil { selectedID = nil; escArmed = false; return nil }
                 if !annotations.isEmpty, !escArmed {
                     escArmed = true
                     status = "Press ⎋ again to discard \(annotations.count) "
