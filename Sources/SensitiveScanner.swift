@@ -59,16 +59,36 @@ enum SensitiveScanner {
         // Tên người thì chỉ bôi KHI ảnh có bối cảnh thẻ (đã thấy số thẻ / CVV /
         // hạn thẻ). Bôi mọi cái tên trong mọi ảnh chụp thì hỏng: screenshot chat,
         // commit log, danh bạ… cái nào cũng đầy tên người.
-        if found.contains(where: { $0.kind == .card || $0.kind == .cvv || $0.kind == .expiry }) {
+        //
+        // Và chỉ trong PHẠM VI cái thẻ. Có bối cảnh thẻ mà quét tên cả tấm ảnh
+        // thì mọi nhãn Title Case ngoài rìa — "Other Tools", "Line Count Tool" —
+        // đều trông y như tên người: 2-4 từ, viết hoa đầu, không có số.
+        if let zone = cardZone(found) {
             for line in lines {
                 let s = line.string
                 for range in cardholderNames(in: s) {
-                    guard let m = match(.name, range, on: line) else { continue }
+                    guard let m = match(.name, range, on: line),
+                          zone.contains(CGPoint(x: m.rect.midX, y: m.rect.midY))
+                    else { continue }
                     found.append(m)
                 }
             }
         }
         return merged(found)
+    }
+
+    /// Vùng "quanh cái thẻ": bao cả số thẻ / CVV / hạn thẻ rồi nới ra để với tới
+    /// dòng tên (nằm dưới đáy thẻ, cách số thẻ một quãng). `nil` nếu ảnh không có
+    /// dữ liệu thẻ nào — lúc đó không dò tên.
+    ///
+    /// Nới theo CHÍNH kích thước cụm chữ tìm được, cộng một sàn tuyệt đối cho
+    /// trường hợp chỉ bắt được mỗi dòng số thẻ (cụm mỏng dính, nhân lên vẫn bé).
+    private static func cardZone(_ found: [SensitiveMatch]) -> CGRect? {
+        let anchors = found.filter { $0.kind == .card || $0.kind == .cvv || $0.kind == .expiry }
+        guard var zone = anchors.first?.rect else { return nil }
+        for a in anchors.dropFirst() { zone = zone.union(a.rect) }
+        return zone.insetBy(dx: -max(zone.width * 0.4, 0.06),
+                            dy: -max(zone.height * 1.4, 0.08))
     }
 
     /// Tóm tắt kiểu "2 emails, 1 card number" cho dòng trạng thái.
