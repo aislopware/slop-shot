@@ -110,6 +110,8 @@ struct EditorView: View {
     // Lô ô blur của LẦN redact gần nhất — để ⌘Z gỡ cả loạt chứ không từng cái.
     @State private var redactBatch: Set<UUID> = []
     @State private var redoBatch: Set<UUID> = []
+    // Lô vừa che là những gì — ⌘Z gỡ ra thì lấy lại đúng cảnh báo cũ.
+    @State private var redactedMatches: [SensitiveMatch] = []
     @FocusState private var textFocused: Bool
 
     init(image: NSImage, sourceURL: URL?, onClose: (() -> Void)? = nil) {
@@ -269,7 +271,14 @@ struct EditorView: View {
             redoStack.append(contentsOf: batch)
             redoBatch = redactBatch
             redactBatch = []
-            status = "Removed \(batch.count) redaction\(batch.count == 1 ? "" : "s")"
+            // Gỡ blur ra là dữ liệu nhạy cảm HIỆN LẠI — phải cảnh báo lại y như
+            // lúc mới mở ảnh, không thì chấm cam tắt ngóm mà ảnh thì đang hở.
+            pendingMatches = redactedMatches
+            redactHint = redactedMatches.count
+            status = redactedMatches.isEmpty
+                ? "Removed \(batch.count) redaction\(batch.count == 1 ? "" : "s")"
+                : "Removed \(batch.count) redaction\(batch.count == 1 ? "" : "s") — "
+                  + "\(SensitiveScanner.summary(redactedMatches)) visible again"
             return
         }
         redoStack.append(annotations.removeLast())
@@ -283,6 +292,8 @@ struct EditorView: View {
             annotations.append(contentsOf: batch)
             redactBatch = redoBatch
             redoBatch = []
+            pendingMatches = []; redactHint = 0      // che lại rồi thì thôi cảnh báo
+            status = "Redacted \(batch.count) item\(batch.count == 1 ? "" : "s") again"
             return
         }
         annotations.append(redoStack.removeLast())
@@ -309,6 +320,11 @@ struct EditorView: View {
         clearedBackup = annotations
         annotations = []
         redoStack = []
+        // Clear cuốn sạch cả ô blur → cảnh báo lại, giống hệt đường ⌘Z ở trên.
+        if !redactBatch.isEmpty {
+            pendingMatches = redactedMatches
+            redactHint = redactedMatches.count
+        }
         redactBatch = []; redoBatch = []
         selectedID = nil
         editingID = nil
@@ -660,6 +676,7 @@ struct EditorView: View {
             redactBatch = ids       // chỉ lô MỚI NHẤT được gỡ nguyên cụm bằng ⌘Z
             redoBatch = []
             redoStack.removeAll(); clearedBackup = nil
+            redactedMatches = found // giữ lại để ⌘Z còn biết vừa che mất những gì
             pendingMatches = []; redactHint = 0
             status = "Blurred \(found.count) item\(found.count == 1 ? "" : "s") "
                    + "(\(SensitiveScanner.summary(found))) — ⌘Z to undo, or Select + ⌫ for one"
@@ -878,7 +895,8 @@ struct EditorView: View {
         guard let cg = ImageOps.cg(image),
               let out = ImageOps.flip(cg, horizontal: horizontal) else { return }
         image = ImageOps.ns(out, scale: image.size.width / CGFloat(cg.width))
-        pendingMatches = []      // toạ độ dò sẵn lệch hết sau khi lật → dò lại từ đầu
+        // Toạ độ dò sẵn lệch hết sau khi lật → dò lại từ đầu.
+        pendingMatches = []; redactedMatches = []; redactHint = 0
         for i in annotations.indices {
             annotations[i].points = annotations[i].points.map {
                 horizontal ? CGPoint(x: 1 - $0.x, y: $0.y) : CGPoint(x: $0.x, y: 1 - $0.y)
@@ -894,7 +912,8 @@ struct EditorView: View {
         guard let cg = ImageOps.cg(image),
               let out = ImageOps.rotate90(cg, clockwise: clockwise) else { return }
         image = ImageOps.ns(out, scale: image.size.width / CGFloat(cg.width))
-        pendingMatches = []      // như flipBase: xoay xong toạ độ cũ vô nghĩa
+        // Như flipBase: xoay xong toạ độ cũ vô nghĩa.
+        pendingMatches = []; redactedMatches = []; redactHint = 0
         for i in annotations.indices {
             annotations[i].points = annotations[i].points.map {
                 clockwise ? CGPoint(x: 1 - $0.y, y: $0.x) : CGPoint(x: $0.y, y: 1 - $0.x)
