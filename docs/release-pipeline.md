@@ -183,11 +183,9 @@ kéo từ đó. Xoay chứng chỉ là sửa một chỗ, không phải đi sử
 | `APPLE_APP_SPECIFIC_PASSWORD` | package — app-specific password của `APPLE_ID` |
 | `HOMEBREW_TAP_TOKEN` | tap — PAT có quyền push vào `aislopware/homebrew-tap` |
 
-CI cài `@better-update/cli@latest` **kèm `--minimum-release-age=0`**, và cái cờ đó là bắt
-buộc chứ không phải trang trí: mặc định bun giữ lại các bản publish trong 24h, nên `@latest`
-trần có thể âm thầm rơi về một build cũ hơn mức server chấp nhận (server từ chối mọi bản
-dưới `0.72.0`). Chính rủi ro đó là lý do trước đây phải ghim cứng một version; tắt cái
-giữ-lại đi thì bỏ được ghim mà không dính lại cái bẫy.
+CI cài better-update CLI bằng `install.sh` (binary độc lập, gói npm đã deprecated); không đặt
+`BETTER_UPDATE_VERSION` thì luôn là bản mới nhất, nên không vướng mức tối thiểu server chấp nhận
+(server từ chối mọi bản dưới `0.72.0`).
 
 ## 5. Homebrew tap
 
