@@ -4,6 +4,14 @@ Sinh từ commit log bằng [git-cliff](https://git-cliff.org). Mục nào nằm
 loại (type) của commit quyết định — tức quyết định lúc VIẾT commit, không phải lúc cắt
 release. Quy ước được `scripts/check-commit-msg.sh` chặn ngay ở hook commit-msg.
 
+## [0.6.0](https://github.com/aislopware/slop-shot/compare/v0.5.0...v0.6.0) — 2026-09-30
+
+### Features
+
+- One look everywhere, glass surfaces, buttons react to hover ([`1fca51a`](https://github.com/aislopware/slop-shot/commit/1fca51a9603bb2b1f77a1cf8e1c262af6d555eb1))
+- Pick tools with a single key; buttons react on hover ([`4cddd61`](https://github.com/aislopware/slop-shot/commit/4cddd61cbaf2b6dcbd495429c46c2d787a432316))
+- Flash the captured area ([`ccd945d`](https://github.com/aislopware/slop-shot/commit/ccd945d70ec255d46db3aafe7a45026c2bedc696))
+
 ## [0.5.0](https://github.com/aislopware/slop-shot/compare/v0.4.1...v0.5.0) — 2026-09-30
 
 ### Features
