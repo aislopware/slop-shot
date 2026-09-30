@@ -9,11 +9,16 @@ import SwiftUI
 final class EditorWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
 
+    /// Editor đang mở có nét vẽ chưa chép/lưu ra đâu.
+    private(set) var hasUnsavedAnnotations = false
+
     func open(image: NSImage, sourceURL: URL?) {
         window?.close()
+        hasUnsavedAnnotations = false
 
         let root = EditorView(image: image, sourceURL: sourceURL,
-                              onClose: { [weak self] in self?.window?.close() })
+                              onClose: { [weak self] in self?.window?.close() },
+                              onDirtyChange: { [weak self] in self?.hasUnsavedAnnotations = $0 })
         let host = NSHostingView(rootView: root)
 
         let win = NSWindow(
@@ -58,6 +63,7 @@ final class EditorWindowController: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         window = nil
+        hasUnsavedAnnotations = false
         NSApp.setActivationPolicy(.accessory)
     }
 }

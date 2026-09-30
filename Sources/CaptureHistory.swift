@@ -150,25 +150,43 @@ final class CaptureHistory: ObservableObject {
     }
 
     // Thu nhỏ ảnh xuống tối đa 240px cạnh dài rồi ghi PNG (cho nhẹ đĩa).
+    //
+    // Chạy ở luồng nền: thu nhỏ + mã hoá một ảnh 5K trên main từng làm khựng
+    // ngay lúc preview vừa hiện. Xong thì báo SwiftUI vẽ lại dòng lịch sử.
     private func writeThumb(_ image: NSImage, for item: HistoryItem) {
-        let maxSide: CGFloat = 240
-        let s = image.size
-        guard s.width > 0, s.height > 0 else { return }
-        let scale = min(1, maxSide / max(s.width, s.height))
-        let target = NSSize(width: max(s.width * scale, 1), height: max(s.height * scale, 1))
+        guard let cg = ImageOps.cg(image) else { return }
+        let url = thumbsDir.appendingPathComponent(item.thumbFileName)
+        let id = item.id
+        Task { [weak self] in
+            let small = await Task.detached(priority: .utility) { () -> CGImage? in
+                guard let small = Self.downscale(cg, maxSide: 240) else { return nil }
+                // .atomic: dòng lịch sử có thể đọc file này đúng lúc đang ghi dở.
+                if let data = AppSettings.ImageFormat.png.encode(small) {
+                    try? data.write(to: url, options: .atomic)
+                }
+                return small
+            }.value
+            guard let self, let small else { return }
+            self.thumbCache[id] = NSImage(cgImage: small,
+                                          size: NSSize(width: small.width, height: small.height))
+            self.objectWillChange.send()
+        }
+    }
 
-        let resized = NSImage(size: target)
-        resized.lockFocus()
-        image.draw(in: NSRect(origin: .zero, size: target),
-                   from: NSRect(origin: .zero, size: s),
-                   operation: .copy, fraction: 1)
-        resized.unlockFocus()
-
-        guard let tiff = resized.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff),
-              let png = rep.representation(using: .png, properties: [:]) else { return }
-        try? png.write(to: thumbsDir.appendingPathComponent(item.thumbFileName))
-        thumbCache[item.id] = resized
+    nonisolated private static func downscale(_ cg: CGImage, maxSide: CGFloat) -> CGImage? {
+        let w = CGFloat(cg.width), h = CGFloat(cg.height)
+        guard w > 0, h > 0 else { return nil }
+        let scale = min(1, maxSide / max(w, h))
+        let tw = max(Int(w * scale), 1), th = max(Int(h * scale), 1)
+        guard let ctx = CGContext(data: nil, width: tw, height: th, bitsPerComponent: 8,
+                                  bytesPerRow: 0,
+                                  space: cg.colorSpace.flatMap { $0.model == .rgb ? $0 : nil }
+                                      ?? CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        ctx.interpolationQuality = .high
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: tw, height: th))
+        return ctx.makeImage()
     }
 
     private func save() {

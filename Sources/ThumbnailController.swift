@@ -195,6 +195,7 @@ final class ThumbnailController {
     func show(image: NSImage,
               fileURL: URL,
               isVideo: Bool = false,
+              on targetScreen: NSScreen? = nil,
               onEdit: @escaping () -> Void,
               onCopy: @escaping () -> Void,
               onSave: @escaping () -> Void,
@@ -207,7 +208,9 @@ final class ThumbnailController {
         let size = NSSize(width: ThumbnailCard.card.width + pad * 2,
                           height: ThumbnailCard.card.height + pad * 2)
 
-        guard let screen = NSScreen.main else { return }
+        // Hiện trên màn hình vừa chụp — không phải màn "chính", kẻo chụp ở màn
+        // phụ mà thẻ lại bật ra tận màn kia.
+        guard let screen = targetScreen ?? NSScreen.main else { return }
         side = AppSettings.shared.previewSide
         let margin: CGFloat = 24
         let vf = screen.visibleFrame
@@ -287,7 +290,12 @@ final class ThumbnailController {
             p.animator().setFrame(f, display: true)
             p.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
-            MainActor.assumeIsolated { self?.hide() }   // completion chạy trên main
+            // Chỉ gỡ ĐÚNG thẻ vừa trượt đi: chụp tiếp trong 0.28s lúc nó đang trượt
+            // thì `panel` đã là thẻ mới, hide() mù sẽ xoá luôn thẻ mới.
+            MainActor.assumeIsolated {
+                guard let self, self.panel === p else { p.orderOut(nil); return }
+                self.hide()
+            }
         })
     }
 

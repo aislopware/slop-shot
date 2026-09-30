@@ -33,17 +33,62 @@ final class ScreenCapturer: ObservableObject {
     private var recScreen: NSScreen?         // màn hình đang quay
     private var lastImage: NSImage?   // giữ ảnh gần nhất để mở editor
 
+    /// Đang có một lượt chụp dở (overlay chọn vùng, chụp cuộn…). Bấm phím tắt
+    /// thêm lần nữa lúc này từng mở chồng overlay thứ hai lên, overlay cũ bị bỏ
+    /// rơi nằm đè màn hình mãi. Giờ phím tắt thứ hai bị bỏ qua.
+    private var busy = false
+
+    /// Danh sách màn hình/app của ScreenCaptureKit, hỏi sẵn một lần rồi dùng lại.
+    /// Hỏi lại mỗi lần bấm phím tắt là một nhịp chờ tccd + WindowServer trước khi
+    /// overlay kịp hiện. Đổi màn hình (cắm/rút, đổi độ phân giải) thì bỏ cache.
+    private var shareable: SCShareableContent?
+    private var screenObserver: NSObjectProtocol?
+
+    init() {
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.shareable = nil }
+        }
+        // Làm nóng sẵn để phím tắt đầu tiên cũng nhanh như các lần sau.
+        if CGPreflightScreenCaptureAccess() {
+            Task { _ = try? await self.shareableContent() }
+        }
+    }
+
     // Chỉ ẢNH mới mở được editor; clip video thì không (lastImage = nil).
     var canEditLast: Bool { lastImage != nil }
 
     // Bắt đầu chụp/quay mới → tự đóng MỌI cửa sổ đang mở (editor ảnh, Quick Look,
     // Video Editor) mà KHÔNG lưu — giống CleanShot. Tránh việc thao tác mới nhảy
     // về cái cũ.
-    private func dismissOpenEditors() {
+    /// Trả về false nếu người dùng muốn giữ editor đang có nét vẽ chưa lưu —
+    /// khi đó lượt chụp mới thôi, không đóng gì cả.
+    private func dismissOpenEditors() -> Bool {
+        if editor.hasUnsavedAnnotations {
+            NSApp.activate()
+            let alert = NSAlert()
+            alert.messageText = "Discard your annotations?"
+            alert.informativeText = "The editor is still open with drawings you haven't copied or saved. Starting a new capture closes it."
+            alert.addButton(withTitle: "Discard & Capture")
+            alert.addButton(withTitle: "Keep Editing")
+            guard alert.runModal() == .alertFirstButtonReturn else { return false }
+        }
         editor.dismiss()
         videoViewer.dismiss()
         videoEditor.dismiss()
         ocrWindow.dismiss()
+        return true
+    }
+
+    /// Cổng vào chung của mọi lượt chụp: không chồng lượt, có quyền, dọn editor.
+    /// Qua được thì `busy` bật — người gọi phải `defer { busy = false }`.
+    private func beginSession() -> Bool {
+        guard !busy, ensureScreenAccess(), dismissOpenEditors() else { return false }
+        busy = true
+        thumbnail.hide()       // cửa sổ của chính app đã bị loại khỏi ảnh, khỏi cần chờ
+        return true
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -109,14 +154,14 @@ final class ScreenCapturer: ObservableObject {
     // BƯỚC 1: chụp toàn màn hình chính.
     // ═══════════════════════════════════════════════════════════════════════
     func captureFullScreen() async {
-        guard ensureScreenAccess() else { return }
-        dismissOpenEditors()   // chụp mới → tự đóng editor cũ (không lưu), như CleanShot
-        thumbnail.hide()       // cửa sổ của chính app đã bị loại khỏi ảnh, khỏi cần chờ
+        guard beginSession() else { return }   // chụp mới → tự đóng editor cũ, như CleanShot
+        defer { busy = false }
 
         do {
-            let screen = NSScreen.main ?? NSScreen.screens.first!
+            // Màn hình đang có chuột, như mọi chế độ khác — không phải màn "chính".
+            let screen = screenUnderCursor()
             let cgImage = try await captureDisplay(on: screen)
-            finishImage(cgImage, subtitle: "\(cgImage.width)×\(cgImage.height)px")
+            finishImage(cgImage, subtitle: "\(cgImage.width)×\(cgImage.height)px", on: screen)
         } catch {
             report(error)
         }
@@ -126,10 +171,9 @@ final class ScreenCapturer: ObservableObject {
     // BƯỚC 2: kéo chuột chọn vùng rồi chụp đúng vùng đó.
     // ═══════════════════════════════════════════════════════════════════════
     func captureRegion() async {
-        guard ensureScreenAccess() else { return }
-        dismissOpenEditors()   // chụp mới → tự đóng editor cũ (không lưu)
+        guard beginSession() else { return }
+        defer { busy = false }
         let screen = screenUnderCursor()
-        thumbnail.hide()
 
         // ĐÓNG BĂNG màn hình NGAY lúc bấm phím tắt, TRƯỚC khi mở overlay.
         // Nhờ vậy ảnh giữ đúng những gì đang thấy: app dưới có tự đóng lightbox,
@@ -157,7 +201,7 @@ final class ScreenCapturer: ObservableObject {
                 try? await Task.sleep(nanoseconds: 150_000_000)   // đợi overlay biến mất
                 cropped = try await captureCropped(rect: rect, on: screen)
             }
-            finishImage(cropped, subtitle: "\(cropped.width)×\(cropped.height)px")
+            finishImage(cropped, subtitle: "\(cropped.width)×\(cropped.height)px", on: screen)
         } catch {
             report(error)
         }
@@ -167,14 +211,14 @@ final class ScreenCapturer: ObservableObject {
     // OCR: kéo chọn vùng → đọc chữ trong vùng → copy thẳng text vào clipboard.
     // ═══════════════════════════════════════════════════════════════════════
     func captureText() async {
-        guard ensureScreenAccess() else { return }
-        dismissOpenEditors()
+        guard beginSession() else { return }
+        defer { busy = false }
         let screen = screenUnderCursor()
-        thumbnail.hide()
         let frozen = try? await captureDisplay(on: screen)
 
         let rect: CGRect? = await withCheckedContinuation { cont in
             selection.begin(on: screen, frozen: frozen,
+                            tool: "Capture Text", toolIcon: "text.viewfinder",
                             confirmTitle: "Read Text", confirmIcon: "text.viewfinder") {
                 cont.resume(returning: $0)
             }
@@ -214,10 +258,9 @@ final class ScreenCapturer: ObservableObject {
     // Hút màu: đóng băng màn hình → soi từng pixel → chép mã màu ra clipboard.
     // ═══════════════════════════════════════════════════════════════════════
     func pickColor() async {
-        guard ensureScreenAccess() else { return }
-        dismissOpenEditors()
+        guard beginSession() else { return }
+        defer { busy = false }
         let screen = screenUnderCursor()
-        thumbnail.hide()
 
         // Không có ảnh đóng băng thì không đọc được pixel nào — khác các luồng
         // chụp khác, ở đây không có đường lui nào cả.
@@ -258,14 +301,14 @@ final class ScreenCapturer: ObservableObject {
     // CHỤP CUỘN: chọn vùng → vừa cuộn vừa chụp → ghép thành 1 ảnh dài.
     // ═══════════════════════════════════════════════════════════════════════
     func captureScrollingArea() async {
-        guard ensureScreenAccess() else { return }
-        dismissOpenEditors()
+        guard beginSession() else { return }
+        defer { busy = false }
         let screen = screenUnderCursor()
-        thumbnail.hide()
         let frozen = try? await captureDisplay(on: screen)
 
         let rect: CGRect? = await withCheckedContinuation { cont in
             selection.begin(on: screen, frozen: frozen,
+                            tool: "Scrolling Capture", toolIcon: "arrow.up.and.down.text.horizontal",
                             confirmTitle: "Start Scrolling Capture",
                             confirmIcon: "arrow.up.and.down.text.horizontal") {
                 cont.resume(returning: $0)
@@ -299,10 +342,10 @@ final class ScreenCapturer: ObservableObject {
                 lastStatus = "Scrolling capture cancelled (nothing captured)."
                 return
             }
-            finishImage(cg, subtitle: "\(cg.width)×\(cg.height)px (scrolling)")
+            finishImage(cg, subtitle: "\(cg.width)×\(cg.height)px (scrolling)", on: screen)
         } catch {
             recordingOverlay.hide()
-            lastStatus = "❌ Scrolling capture failed: \(error.localizedDescription)"
+            report(error)
         }
     }
 
@@ -310,14 +353,13 @@ final class ScreenCapturer: ObservableObject {
     // BƯỚC 3: QUAY VIDEO 1 vùng màn hình. Bấm lần nữa (hoặc nút ⏹) để dừng.
     // ═══════════════════════════════════════════════════════════════════════
     func recordRegion() async {
-        guard ensureScreenAccess() else { return }
         // Đang quay → coi như lệnh dừng (để phím tắt bật/tắt cùng 1 tổ hợp).
         if isRecording { await stopRecording(); return }
-        dismissOpenEditors()   // bắt đầu quay mới → đóng editor cũ (không lưu)
+        guard beginSession() else { return }   // bắt đầu quay mới → đóng editor cũ (không lưu)
+        defer { busy = false }
 
         // Chọn màn hình đang có con trỏ (giống captureRegion).
         let screen = screenUnderCursor()
-        thumbnail.hide()
 
         // Kéo chuột chọn vùng (tái dùng overlay của chụp ảnh, có cả bắt dính).
         let frozen = try? await captureDisplay(on: screen)
@@ -325,6 +367,7 @@ final class ScreenCapturer: ObservableObject {
         // (hoặc ↩) mới bắt đầu.
         let rect: CGRect? = await withCheckedContinuation { cont in
             selection.begin(on: screen, frozen: frozen,
+                            tool: "Record Area", toolIcon: "record.circle",
                             confirmTitle: "Start Recording", confirmIcon: "record.circle") {
                 cont.resume(returning: $0)
             }
@@ -335,7 +378,7 @@ final class ScreenCapturer: ObservableObject {
         try? await Task.sleep(nanoseconds: 150_000_000)
 
         do {
-            try await recorder.start(rect: rect, screen: screen)
+            try await startRecorder(rect: rect, screen: screen)
             isRecording = true
             recRect = rect; recScreen = screen
             recordingBar.onStop      = { [weak self] in Task { await self?.stopRecording() } }
@@ -356,8 +399,26 @@ final class ScreenCapturer: ObservableObject {
             lastStatus = "🔴 Recording… click ⏹ (or \(settings.hotkey(for: .recordArea).display)) to stop."
         } catch {
             recordingOverlay.hide()
-            lastStatus = "❌ Couldn't start recording: \(error.localizedDescription)"
+            report(error)
         }
+    }
+
+    /// Bật recorder với tuỳ chọn âm thanh hiện tại. Mic thì hỏi quyền trước —
+    /// bị từ chối thì vẫn quay, chỉ là không có tiếng mic.
+    private func startRecorder(rect: CGRect, screen: NSScreen) async throws {
+        var mic = settings.recordMicrophone
+        if mic, AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
+            mic = await AVCaptureDevice.requestAccess(for: .audio)
+        }
+        recorder.onStreamError = { [weak self] error in
+            guard let self, self.isRecording else { return }
+            Task {
+                await self.stopRecording()
+                self.report(error)
+            }
+        }
+        try await recorder.start(rect: rect, screen: screen,
+                                 systemAudio: settings.recordSystemAudio, microphone: mic)
     }
 
     // Quay lại từ đầu: bỏ clip hiện tại rồi bật quay lại đúng vùng đó.
@@ -365,12 +426,14 @@ final class ScreenCapturer: ObservableObject {
         guard isRecording, let screen = recScreen else { return }
         await recorder.discard()
         do {
-            try await recorder.start(rect: recRect, screen: screen)
+            try await startRecorder(rect: recRect, screen: screen)
             lastStatus = "🔴 Restarting…"
         } catch {
             isRecording = false
             recordingBar.hide()
-            lastStatus = "❌ Couldn't restart: \(error.localizedDescription)"
+            recordingOverlay.hide()
+            clickEffect.stop()
+            report(error)
         }
     }
 
@@ -395,9 +458,11 @@ final class ScreenCapturer: ObservableObject {
         let clickLog = clickEffect.clicks
 
         guard let tmpURL = await recorder.stop() else {
-            lastStatus = "❌ Recording failed (no frames captured)."
+            report(NSError(domain: "SlopShot", code: 11, userInfo: [
+                NSLocalizedDescriptionKey: "The recording couldn't be saved — no frames were captured."]))
             return
         }
+        playCaptureSound()
 
         // Giữ nguyên file .mov TẠM; bấm Save trên preview mới copy ra folder.
         let url = tmpURL
@@ -425,6 +490,7 @@ final class ScreenCapturer: ObservableObject {
             image: poster,
             fileURL: url,
             isVideo: true,
+            on: recScreen,
             onEdit: { [weak self] in self?.videoViewer.open(url: url) },   // 👁 Quick Look trong app
             onCopy: {
                 let pb = NSPasteboard.general
@@ -474,7 +540,7 @@ final class ScreenCapturer: ObservableObject {
             lastStatus = "✅ Saved to \(settings.saveFolderDisplay)"
             // KHÔNG hide() ở đây — preview tự hiện tick rồi trượt đi (như Copy).
         } catch {
-            lastStatus = "❌ Save failed: \(error.localizedDescription)"
+            report(error)
         }
     }
 
@@ -489,7 +555,7 @@ final class ScreenCapturer: ObservableObject {
             lastStatus = "✅ Saved to \(settings.saveFolderDisplay)"
             // KHÔNG hide() ở đây — preview tự hiện tick rồi trượt đi (như Copy).
         } catch {
-            lastStatus = "❌ Save failed: \(error.localizedDescription)"
+            report(error)
         }
     }
 
@@ -502,53 +568,76 @@ final class ScreenCapturer: ObservableObject {
             try FileManager.default.copyItem(at: src, to: dest)
             lastStatus = "✅ Saved to \(settings.saveFolderDisplay)"
         } catch {
-            lastStatus = "❌ Save failed: \(error.localizedDescription)"
+            report(error)
         }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
     // Sau khi chụp xong: chép clipboard + hiện thumbnail nổi + cập nhật state.
     // ═══════════════════════════════════════════════════════════════════════
-    private func finishImage(_ cgImage: CGImage, subtitle: String) {
+    //
+    // Thứ tự quan trọng cho cảm giác "nhanh": tiếng chụp + preview hiện NGAY,
+    // còn mã hoá PNG (100-300ms với màn 5K) và ghi đĩa chạy ở luồng nền. Xong
+    // file mới chép clipboard (clipboard có kèm URL file) và ghi lịch sử.
+    private func finishImage(_ cgImage: CGImage, subtitle: String, on screen: NSScreen) {
         let nsImage = NSImage(cgImage: cgImage,
                               size: NSSize(width: cgImage.width, height: cgImage.height))
         let baseName = "SlopShot \(timestampNow())"
+        // Giữ chỗ tên file ngay, file thật ghi sau (LUÔN ghi tạm; bấm Save trên
+        // preview mới ra file chính thức).
+        let url = TempFiles.uniqueURL(named: baseName, ext: "png", reserve: true)
 
-        // 1) LUÔN ghi tạm. File thật chỉ ra khi user bấm Save trên preview.
-        let url = try? saveTempPNG(cgImage)
-
-        // 2) Clipboard (tùy cài đặt): chép cả ảnh lẫn file.
-        if settings.copyToClipboard {
-            let pb = NSPasteboard.general
-            pb.clearContents()
-            if let url { pb.writeObjects([nsImage, url as NSURL]) } else { pb.writeObjects([nsImage]) }
-        }
-
+        playCaptureSound()
         lastImage = nsImage
         lastSavedURL = url
-
-        // 3) Ghi vào lịch sử.
-        history.add(kind: .image, fileURL: url, text: nil, subtitle: subtitle, image: nsImage)
-
-        // 4) Trạng thái.
         lastStatus = settings.copyToClipboard
             ? "✅ \(subtitle) · copied to clipboard."
             : "✅ Captured \(subtitle)."
 
-        // 5) Preview thumbnail. Save = ghi THẲNG vào folder đích (không hỏi).
-        guard settings.showThumbnail, let url else { return }
-        thumbnail.show(
-            image: nsImage,
-            fileURL: url,
-            onEdit: { [weak self] in self?.editor.open(image: nsImage, sourceURL: url) },
-            onCopy: {
+        // Preview. Save = ghi THẲNG vào folder đích (không hỏi).
+        if settings.showThumbnail {
+            thumbnail.show(
+                image: nsImage,
+                fileURL: url,
+                on: screen,
+                onEdit: { [weak self] in self?.editor.open(image: nsImage, sourceURL: url) },
+                onCopy: {
+                    let pb = NSPasteboard.general
+                    pb.clearContents()
+                    pb.writeObjects([nsImage, url as NSURL])
+                },
+                onSave: { [weak self] in self?.quickSaveImage(cgImage, baseName: baseName) }
+            )
+        }
+
+        Task {
+            let written = await Task.detached(priority: .userInitiated) {
+                guard let data = AppSettings.ImageFormat.png.encode(cgImage) else { return false }
+                return (try? data.write(to: url)) != nil
+            }.value
+            if !written { try? FileManager.default.removeItem(at: url) }
+            let fileURL = written ? url : nil
+
+            // Clipboard (tùy cài đặt): chép cả ảnh lẫn file.
+            if settings.copyToClipboard {
                 let pb = NSPasteboard.general
                 pb.clearContents()
-                pb.writeObjects([nsImage, url as NSURL])
-            },
-            onSave: { [weak self] in self?.quickSaveImage(cgImage, baseName: baseName) }
-        )
+                pb.writeObjects(fileURL.map { [nsImage, $0 as NSURL] } ?? [nsImage])
+            }
+            history.add(kind: .image, fileURL: fileURL, text: nil, subtitle: subtitle, image: nsImage)
+        }
     }
+
+    // Tiếng "tách" của macOS khi chụp (cùng file công cụ chụp của hệ thống dùng).
+    private func playCaptureSound() {
+        guard settings.playCaptureSound else { return }
+        Self.shutter?.stop()
+        Self.shutter?.play()
+    }
+    private static let shutter: NSSound? = {
+        let system = "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/Screen Capture.aif"
+        return NSSound(contentsOfFile: system, byReference: true) ?? NSSound(named: "Tink")
+    }()
 
     // Ghi CGImage thành file ảnh (theo format đã chọn) vào `folder`, tránh trùng tên.
     @discardableResult
@@ -656,11 +745,25 @@ final class ScreenCapturer: ObservableObject {
     // Cửa sổ của CHÍNH SlopShot (thumbnail, overlay, thanh recording…) bị loại
     // khỏi ảnh ngay từ bộ lọc → khỏi phải "ẩn rồi ngủ 120ms" cầu may như trước.
     private func captureDisplay(on screen: NSScreen) async throws -> CGImage {
+        do {
+            return try await captureDisplay(on: screen, content: try await shareableContent())
+        } catch {
+            // Cache có thể đã cũ (màn hình vừa đổi mà chưa kịp báo) → hỏi lại 1 lần.
+            return try await captureDisplay(on: screen, content: try await shareableContent(refresh: true))
+        }
+    }
+
+    private func shareableContent(refresh: Bool = false) async throws -> SCShareableContent {
+        if !refresh, let shareable { return shareable }
         let content = try await SCShareableContent.excludingDesktopWindows(
-            false, onScreenWindowsOnly: false
-        )
-        guard let display = content.displays.first(where: { $0.displayID == screen.displayID })
-                ?? content.displays.first else {
+            false, onScreenWindowsOnly: false)
+        shareable = content
+        return content
+    }
+
+    private func captureDisplay(on screen: NSScreen,
+                                content: SCShareableContent) async throws -> CGImage {
+        guard let display = content.displays.first(where: { $0.displayID == screen.displayID }) else {
             throw NSError(domain: "SlopShot", code: 3,
                           userInfo: [NSLocalizedDescriptionKey: "No display found."])
         }
@@ -701,22 +804,6 @@ final class ScreenCapturer: ObservableObject {
     private func captureCropped(rect: CGRect, on screen: NSScreen) async throws -> CGImage {
         let cgFull = try await captureDisplay(on: screen)
         return try crop(cgFull, to: rect, on: screen)
-    }
-
-    // Đổi CGImage → PNG → ghi vào THƯ MỤC TẠM (chưa lưu chính thức).
-    // Người dùng bấm Save trên preview mới chọn đích lưu thật.
-    private func saveTempPNG(_ cgImage: CGImage) throws -> URL {
-        let rep = NSBitmapImageRep(cgImage: cgImage)
-        guard let data = rep.representation(using: .png, properties: [:]) else {
-            throw NSError(domain: "SlopShot", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "Couldn't create PNG data."])
-        }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
-        let name = "SlopShot \(formatter.string(from: Date())).png"
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
-        try data.write(to: url)
-        return url
     }
 
 }

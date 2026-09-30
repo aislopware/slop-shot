@@ -129,6 +129,7 @@ private struct CaptureTab: View {
 
             Section("After capture") {
                 Toggle("Also copy to clipboard", isOn: $settings.copyToClipboard)
+                Toggle("Play a sound", isOn: $settings.playCaptureSound)
                 Toggle("Show preview thumbnail", isOn: $settings.showThumbnail)
                 Picker("Preview position", selection: $settings.previewSide) {
                     ForEach(AppSettings.PreviewSide.allCases) { side in
@@ -137,6 +138,14 @@ private struct CaptureTab: View {
                 }
                 .disabled(!settings.showThumbnail)
                 Text("Right-handed? Put the preview on the right, closer to where your mouse already is.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Recording") {
+                Toggle("Record system audio", isOn: $settings.recordSystemAudio)
+                Toggle("Record microphone", isOn: $settings.recordMicrophone)
+                Text("System audio is what your Mac plays (apps, videos, calls). The microphone asks for permission the first time.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

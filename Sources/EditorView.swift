@@ -83,6 +83,8 @@ struct NamedColor: Identifiable {
 struct EditorView: View {
     let sourceURL: URL?
     var onClose: (() -> Void)? = nil
+    /// Có nét vẽ chưa lưu hay không — để chụp mới thì hỏi trước khi đóng editor.
+    var onDirtyChange: ((Bool) -> Void)? = nil
 
     // Ảnh nền để @State được vì flip/rotate sẽ thay nó bằng ảnh đã biến đổi.
     @State private var image: NSImage
@@ -120,10 +122,12 @@ struct EditorView: View {
     @State private var escArmed = false
     @FocusState private var textFocused: Bool
 
-    init(image: NSImage, sourceURL: URL?, onClose: (() -> Void)? = nil) {
+    init(image: NSImage, sourceURL: URL?, onClose: (() -> Void)? = nil,
+         onDirtyChange: ((Bool) -> Void)? = nil) {
         _image = State(initialValue: image)
         self.sourceURL = sourceURL
         self.onClose = onClose
+        self.onDirtyChange = onDirtyChange
     }
 
     private let barHeight: CGFloat = 52
@@ -166,7 +170,10 @@ struct EditorView: View {
         .ignoresSafeArea()
         .onAppear { installKeyMonitor() }
         // Vẽ thêm/xoá bớt là nhả cò ⎋ ra — không thì lỡ tay một phím sau đó là bay.
-        .onChange(of: annotations.count) { _, _ in escArmed = false }
+        .onChange(of: annotations.count) { _, n in
+            escArmed = false
+            onDirtyChange?(n > 0)
+        }
         .onDisappear { removeKeyMonitor() }
         .task { await scanForSensitiveData() }
     }
@@ -1340,6 +1347,7 @@ struct EditorView: View {
         pb.clearContents()
         pb.writeObjects([img])
         status = "Copied"
+        onDirtyChange?(false)
     }
 
     // Copy bản GIF. Clipboard chỉ mang FILE gif + data gif, CỐ TÌNH không kèm
@@ -1424,6 +1432,7 @@ struct EditorView: View {
         do {
             try data.write(to: url)
             status = "Saved \(url.lastPathComponent) (\(sizeText(data.count)))"
+            onDirtyChange?(false)
         } catch {
             status = "Save failed"
         }
