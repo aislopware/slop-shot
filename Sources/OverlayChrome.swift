@@ -33,23 +33,32 @@ enum OverlayChrome {
     // ── Đọc pixel ────────────────────────────────────────────────────────
 
     /// Màu của đúng 1 pixel trong ảnh (toạ độ theo point, gốc trên-trái).
+    ///
+    /// Đọc trong CHÍNH hệ màu của ảnh (màn Mac là Display P3) rồi gắn đúng hệ
+    /// đó cho NSColor. Trước đây vẽ vào DeviceRGB rồi gán nhãn sRGB → mã hex lệch
+    /// với màu thật, nhất là màu rực. Chuyển sang sRGB để ra mã là việc của
+    /// `hex(of:)` / `ColorFormat` (usingColorSpace(.sRGB)).
     static func pixelColor(in cg: CGImage, at p: CGPoint, scale: CGFloat) -> NSColor? {
         let x = Int(p.x * scale), y = Int(p.y * scale)
         guard x >= 0, y >= 0, x < cg.width, y < cg.height,
               let crop = cg.cropping(to: CGRect(x: x, y: y, width: 1, height: 1))
         else { return nil }
+        let space = cg.colorSpace.flatMap { $0.model == .rgb ? $0 : nil }
+            ?? CGColorSpace(name: CGColorSpace.sRGB)!
         // Phải cấp phát riêng: truyền `&mảng` vào CGContext là con trỏ chỉ hợp lệ
         // trong đúng lời gọi đó, dùng tiếp ở c.draw() là chạm bộ nhớ đã hết hạn.
         let px = UnsafeMutablePointer<UInt8>.allocate(capacity: 4)
         px.initialize(repeating: 0, count: 4)
         defer { px.deallocate() }
         guard let c = CGContext(data: px, width: 1, height: 1, bitsPerComponent: 8,
-                                bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
-                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+                                bytesPerRow: 4, space: space,
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let nsSpace = NSColorSpace(cgColorSpace: space)
         else { return nil }
         c.draw(crop, in: CGRect(x: 0, y: 0, width: 1, height: 1))
-        return NSColor(srgbRed: CGFloat(px[0]) / 255, green: CGFloat(px[1]) / 255,
-                       blue: CGFloat(px[2]) / 255, alpha: 1)
+        var comps: [CGFloat] = [CGFloat(px[0]) / 255, CGFloat(px[1]) / 255,
+                                CGFloat(px[2]) / 255, 1]
+        return NSColor(colorSpace: nsSpace, components: &comps, count: 4)
     }
 
     static func hex(of color: NSColor) -> String {
