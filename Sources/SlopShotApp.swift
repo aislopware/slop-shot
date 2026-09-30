@@ -28,13 +28,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupMainMenu() {
         let mainMenu = NSMenu()
 
-        // Menu App (chỉ cần Quit).
+        // Menu App. ⌘Q chỉ đóng cửa sổ đang mở (editor, OCR, Settings…), KHÔNG
+        // thoát app: SlopShot là app nền sống nhờ phím tắt, ⌘Q theo thói quen ở
+        // một cửa sổ phụ mà tắt luôn cả app thì phím tắt chết theo. Muốn thoát
+        // thật thì dùng "Quit SlopShot" trong menu trên thanh menu.
         let appItem = NSMenuItem()
         mainMenu.addItem(appItem)
         let appMenu = NSMenu()
         appItem.submenu = appMenu
-        appMenu.addItem(withTitle: "Quit SlopShot",
-                        action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let close = appMenu.addItem(withTitle: "Close Window",
+                                    action: #selector(closeKeyWindow(_:)), keyEquivalent: "q")
+        close.target = self
 
         // Menu Edit — bộ soạn thảo chuẩn. target = nil nghĩa là gửi theo
         // responder chain: ai đang focus (ô text) sẽ tự nhận đúng action.
