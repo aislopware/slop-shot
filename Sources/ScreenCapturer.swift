@@ -161,6 +161,7 @@ final class ScreenCapturer: ObservableObject {
             // Màn hình đang có chuột, như mọi chế độ khác — không phải màn "chính".
             let screen = screenUnderCursor()
             let cgImage = try await captureDisplay(on: screen)
+            ScreenFlash.flash(on: screen)
             finishImage(cgImage, subtitle: "\(cgImage.width)×\(cgImage.height)px", on: screen)
         } catch {
             report(error)
@@ -201,6 +202,7 @@ final class ScreenCapturer: ObservableObject {
                 try? await Task.sleep(nanoseconds: 150_000_000)   // đợi overlay biến mất
                 cropped = try await captureCropped(rect: rect, on: screen)
             }
+            ScreenFlash.flash(rect, on: screen)
             finishImage(cropped, subtitle: "\(cropped.width)×\(cropped.height)px", on: screen)
         } catch {
             report(error)
