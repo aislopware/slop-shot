@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import ScreenCaptureKit
 
 // ─────────────────────────────────────────────────────────────────────────
 // Các quyền macOS mà SlopShot cần, kèm cách đọc trạng thái và mở đúng trang
@@ -77,20 +78,42 @@ enum SystemPermission: String, CaseIterable, Identifiable {
     /// dụng gì với bản đang chạy. Nên: xoá dòng của CHÍNH app này (không cần quyền
     /// admin), xin lại để macOS ghi một dòng mới đúng chữ ký, rồi mới mở trang —
     /// người dùng chỉ còn việc gạt công tắc.
+    ///
+    /// Hai cái bẫy về thời điểm (đã thử trên macOS 27): dòng mới chỉ được ghi khi
+    /// hộp thoại xin quyền thật sự hiện ra, và System Settings đang mở thì KHÔNG
+    /// tự nạp lại danh sách. Mở trang ngay sau khi xin là trang nạp trước khi dòng
+    /// kịp ghi → vẫn không thấy SlopShot. Nên đóng System Settings trước, xin quyền,
+    /// chờ một nhịp rồi mới mở.
     func openSystemSettings() {
-        if !isGranted {
-            resetOwnEntry()
-            requestAccess()
-        }
         guard let url = URL(string:
             "x-apple.systempreferences:com.apple.preference.security?\(pane)") else { return }
-        NSWorkspace.shared.open(url)
+        guard !isGranted else {
+            NSWorkspace.shared.open(url)
+            return
+        }
+        NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.systempreferences")
+            .forEach { $0.terminate() }
+        resetOwnEntry()
+        requestAccess()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// Xin quyền Screen Recording: macOS hiện hộp thoại và ghi SlopShot vào danh
+    /// sách trong System Settings. Không chờ, không cần kết quả — chỉ cần lời gọi
+    /// chạm tới tccd. Dùng đúng API mà các lệnh chụp dùng (ScreenCaptureKit).
+    static func registerScreenCapture() {
+        Task.detached {
+            _ = try? await SCShareableContent.excludingDesktopWindows(
+                false, onScreenWindowsOnly: true)
+        }
     }
 
     private func requestAccess() {
         switch self {
         case .screenRecording:
-            _ = CGRequestScreenCaptureAccess()
+            Self.registerScreenCapture()
         case .accessibility:
             let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
             _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)

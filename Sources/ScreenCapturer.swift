@@ -59,9 +59,10 @@ final class ScreenCapturer: ObservableObject {
     private func ensureScreenAccess() -> Bool {
         if CGPreflightScreenCaptureAccess() { return true }
 
-        // Gọi cái này để macOS hiện hộp thoại xin quyền (chỉ hiện được 1 lần cho
-        // mỗi bản app; lần sau nó im nên vẫn phải tự chỉ đường bên dưới).
-        CGRequestScreenCaptureAccess()
+        // Đưa SlopShot vào danh sách trong System Settings để người dùng chỉ còn
+        // việc gạt công tắc (prompt của macOS chỉ hiện 1 lần cho mỗi bản app;
+        // lần sau nó im nên vẫn phải tự chỉ đường bên dưới).
+        SystemPermission.registerScreenCapture()
         lastStatus = "❌ Screen Recording permission is off — SlopShot can't capture anything."
 
         NSApp.activate(ignoringOtherApps: true)
