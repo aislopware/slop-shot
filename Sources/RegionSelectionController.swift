@@ -47,10 +47,44 @@ final class SelectionModel: ObservableObject {
     @Published var guideXs: [CGFloat] = []   // đường gióng khi cạnh bị hút
     @Published var guideYs: [CGFloat] = []
 
+    // Kéo xong KHÔNG chụp ngay: khung ở lại để kéo di chuyển / kéo cạnh chỉnh cỡ,
+    // rồi mới bấm nút xác nhận (hoặc ↩ / double-click) — kiểu macshot.
+    @Published var adjusting = false
+    @Published var hoverButton: ActionButton?
+
     var frozen: CGImage?                     // nil = overlay trong suốt, không có kính lúp
     var scaleFactor: CGFloat = 2             // để hiện kích thước theo pixel
     var hintText = "Drag to capture"
     var snapEnabled = true
+    var confirmTitle = "Capture"
+    var confirmIcon = "camera.fill"
+
+    enum ActionButton { case confirm, cancel }
+
+    static let barHeight: CGFloat = 32
+    private static let barFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
+
+    /// Chỗ đặt hai nút dưới khung (hết chỗ thì lên trên, chật nữa thì chui vào
+    /// trong). Lớp vẽ và lớp bắt chuột dùng CHUNG hàm này nên luôn trùng khít.
+    func buttonFrames(in bounds: CGRect) -> (confirm: CGRect, cancel: CGRect) {
+        let r = currentRect
+        let h = Self.barHeight, gap: CGFloat = 8
+        let titleW = (confirmTitle as NSString).size(withAttributes: [.font: Self.barFont]).width
+        let confirmW = ceil(titleW) + 16 + 6 + 28      // icon + khoảng + đệm 2 bên
+        let cancelW = h
+        let total = cancelW + 6 + confirmW
+
+        var y = r.maxY + gap
+        if y + h > bounds.maxY - 6 {
+            y = r.minY - gap - h
+            if y < 6 { y = r.maxY - gap - h }
+        }
+        var x = r.maxX - total
+        x = max(6, min(x, bounds.maxX - total - 6))
+        let cancel = CGRect(x: x, y: y, width: cancelW, height: h)
+        let confirm = CGRect(x: cancel.maxX + 6, y: y, width: confirmW, height: h)
+        return (confirm, cancel)
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -74,16 +108,51 @@ struct SelectionOverlay: View {
                 }
 
                 badge(in: bounds)
+                if model.adjusting, !model.dragging {
+                    actionBar(in: bounds)
+                }
                 loupe(in: bounds)
             }
         }
         .ignoresSafeArea()
     }
 
+    // Hai nút cạnh khung: ✕ huỷ, ✓ chụp / bắt đầu quay. Chỉ để NHÌN — chuột
+    // do SelectionEventView bắt (lớp SwiftUI này không nhận sự kiện).
+    @ViewBuilder
+    private func actionBar(in bounds: CGRect) -> some View {
+        let f = model.buttonFrames(in: bounds)
+        let cancelHot = model.hoverButton == .cancel
+        let confirmHot = model.hoverButton == .confirm
+
+        Image(systemName: "xmark")
+            .font(.system(size: 13, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: f.cancel.width, height: f.cancel.height)
+            .background(OverlayChrome.chipFill.opacity(cancelHot ? 1 : 0.92),
+                        in: RoundedRectangle(cornerRadius: OverlayChrome.radius))
+            .overlay(RoundedRectangle(cornerRadius: OverlayChrome.radius)
+                .stroke(cancelHot ? Color.white.opacity(0.5) : OverlayChrome.chipEdge, lineWidth: 1))
+            .position(x: f.cancel.midX, y: f.cancel.midY)
+
+        HStack(spacing: 6) {
+            Image(systemName: model.confirmIcon)
+            Text(model.confirmTitle)
+        }
+        .font(.system(size: 13, weight: .semibold))
+        .foregroundStyle(.white)
+        .frame(width: f.confirm.width, height: f.confirm.height)
+        .background(Color(nsColor: .controlAccentColor).opacity(confirmHot ? 1 : 0.88),
+                    in: RoundedRectangle(cornerRadius: OverlayChrome.radius))
+        .overlay(RoundedRectangle(cornerRadius: OverlayChrome.radius)
+            .stroke(Color.white.opacity(confirmHot ? 0.6 : 0.25), lineWidth: 1))
+        .position(x: f.confirm.midX, y: f.confirm.midY)
+    }
+
     private var hintSubtitle: String {
         model.snapEnabled
-            ? "click a highlighted area  ·  ⌥ free select  ·  esc to cancel"
-            : "⌥ free select  ·  esc to cancel"
+            ? "click a highlighted area  ·  ⌥ free select  ·  drag the box to adjust, ↩ to confirm  ·  esc to cancel"
+            : "⌥ free select  ·  drag the box to adjust, ↩ to confirm  ·  esc to cancel"
     }
 
     // ── Vẽ nền: phủ tối, khoét lỗ, viền, tay nắm, đường gióng, chữ thập ──
@@ -284,6 +353,18 @@ final class SelectionEventView: NSView {
     private var startPoint: NSPoint?
     private var freeMode = false            // giữ ⌥ = tắt bắt dính
 
+    /// Đang làm gì với khung ở bước chỉnh: kéo cả khung, hay kéo cạnh/góc nào.
+    private enum Grab { case move, resize(Edges), button(SelectionModel.ActionButton) }
+    private struct Edges: OptionSet {
+        let rawValue: Int
+        static let left = Edges(rawValue: 1), right = Edges(rawValue: 2)
+        static let top = Edges(rawValue: 4), bottom = Edges(rawValue: 8)
+    }
+    private var grab: Grab?
+    private var grabRect: CGRect = .zero    // khung lúc bắt đầu kéo/chỉnh
+    private var previousRect: CGRect = .zero  // bấm hụt ra ngoài thì trả lại khung này
+    private var startPointForGrab: CGPoint?   // chỗ bấm chuột lúc bắt đầu dời khung
+
     private let dragThreshold: CGFloat = 4  // xê dưới mức này vẫn tính là "bấm", không phải "kéo"
     private let snapRadius: CGFloat = 9     // bán kính hút (points) — macshot chỉ 4
 
@@ -299,9 +380,106 @@ final class SelectionEventView: NSView {
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
 
-    // Con trỏ hình chữ thập như mọi tool chụp màn hình.
+    // Con trỏ hình chữ thập như mọi tool chụp màn hình. Ở bước chỉnh khung thì
+    // con trỏ đổi theo chỗ đang trỏ (mouseMoved tự set), không dùng cursor rect.
     override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .crosshair)
+        if !model.adjusting { addCursorRect(bounds, cursor: .crosshair) }
+    }
+
+    // ── Bước chỉnh khung ─────────────────────────────────────────────────
+
+    private func enterAdjust(_ rect: CGRect) {
+        model.currentRect = rect
+        model.hover = nil
+        model.dragging = false
+        model.guideXs = []; model.guideYs = []
+        model.adjusting = true
+        window?.invalidateCursorRects(for: self)
+        updateAdjustCursor()
+    }
+
+    /// Cạnh/góc nào đang nằm dưới con trỏ (vùng bắt rộng hơn nét vẽ cho dễ trúng).
+    private func edges(at p: CGPoint) -> Edges {
+        let r = model.currentRect
+        let tol: CGFloat = 8
+        guard p.x >= r.minX - tol, p.x <= r.maxX + tol,
+              p.y >= r.minY - tol, p.y <= r.maxY + tol else { return [] }
+        var e: Edges = []
+        if abs(p.x - r.minX) <= tol { e.insert(.left) }
+        else if abs(p.x - r.maxX) <= tol { e.insert(.right) }
+        if abs(p.y - r.minY) <= tol { e.insert(.top) }
+        else if abs(p.y - r.maxY) <= tol { e.insert(.bottom) }
+        return e
+    }
+
+    private func button(at p: CGPoint) -> SelectionModel.ActionButton? {
+        let f = model.buttonFrames(in: bounds)
+        if f.confirm.contains(p) { return .confirm }
+        if f.cancel.contains(p) { return .cancel }
+        return nil
+    }
+
+    private func updateAdjustCursor() {
+        let p = model.cursor
+        let hot = button(at: p)
+        if hot != model.hoverButton { model.hoverButton = hot }
+        if hot != nil { NSCursor.pointingHand.set(); return }
+        let e = edges(at: p)
+        let pos: NSCursor.FrameResizePosition?
+        switch e {
+        case [.left, .top]:     pos = .topLeft
+        case [.right, .top]:    pos = .topRight
+        case [.left, .bottom]:  pos = .bottomLeft
+        case [.right, .bottom]: pos = .bottomRight
+        case [.left]:           pos = .left
+        case [.right]:          pos = .right
+        case [.top]:            pos = .top
+        case [.bottom]:         pos = .bottom
+        default:                pos = nil
+        }
+        if let pos {
+            NSCursor.frameResize(position: pos, directions: .all).set()
+        } else if model.currentRect.contains(p) {
+            NSCursor.openHand.set()
+        } else {
+            NSCursor.crosshair.set()
+        }
+    }
+
+    /// Khung mới khi đang kéo cạnh/góc: chỉ các cạnh đang nắm là đổi (và được
+    /// hút), cạnh còn lại đứng yên. Kéo quá cạnh đối diện thì lật khung.
+    private func resized(_ e: Edges, to p: CGPoint) -> CGRect {
+        let o = grabRect
+        var x0 = o.minX, x1 = o.maxX, y0 = o.minY, y1 = o.maxY
+        if e.contains(.left) { x0 = p.x }
+        if e.contains(.right) { x1 = p.x }
+        if e.contains(.top) { y0 = p.y }
+        if e.contains(.bottom) { y1 = p.y }
+        var r = CGRect(x: min(x0, x1), y: min(y0, y1), width: abs(x1 - x0), height: abs(y1 - y0))
+            .intersection(bounds)
+        guard r.width >= 3, r.height >= 3 else { return r }
+        let s = snapped(r)
+        // Giữ nguyên cạnh không nắm; chỉ nhận phần hút của cạnh đang kéo.
+        let fixedX = !(e.contains(.left) || e.contains(.right))
+        let fixedY = !(e.contains(.top) || e.contains(.bottom))
+        r = CGRect(x: fixedX ? r.minX : s.minX, y: fixedY ? r.minY : s.minY,
+                   width: fixedX ? r.width : s.width, height: fixedY ? r.height : s.height)
+        if fixedX { model.guideXs = [] }
+        if fixedY { model.guideYs = [] }
+        return r
+    }
+
+    private func moved(by dx: CGFloat, _ dy: CGFloat) -> CGRect {
+        var r = grabRect.offsetBy(dx: dx, dy: dy)
+        r.origin.x = max(bounds.minX, min(r.origin.x, bounds.maxX - r.width))
+        r.origin.y = max(bounds.minY, min(r.origin.y, bounds.maxY - r.height))
+        return r
+    }
+
+    private func confirm() {
+        let r = model.currentRect
+        guard r.width >= 5, r.height >= 5 else { return }
+        onSelected?(r)
     }
 
     // Cần tracking area thì mouseMoved mới được gọi (để dò item dưới con trỏ).
@@ -388,6 +566,7 @@ final class SelectionEventView: NSView {
     override func mouseMoved(with event: NSEvent) {
         model.cursor = convert(event.locationInWindow, from: nil)
         freeMode = event.modifierFlags.contains(.option)
+        if model.adjusting { updateAdjustCursor(); return }
         refreshHover()
     }
 
@@ -402,7 +581,36 @@ final class SelectionEventView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        startPoint = convert(event.locationInWindow, from: nil)
+        let p = convert(event.locationInWindow, from: nil)
+        if model.adjusting {
+            model.cursor = p
+            grabRect = model.currentRect
+            if let b = button(at: p) {
+                grab = .button(b)
+                return
+            }
+            let e = edges(at: p)
+            if !e.isEmpty {
+                grab = .resize(e)
+                model.dragging = true           // hiện kính lúp để canh cạnh tới từng pixel
+                return
+            }
+            if model.currentRect.contains(p) {
+                if event.clickCount >= 2 { confirm(); return }
+                grab = .move
+                startPointForGrab = p
+                NSCursor.closedHand.set()
+                return
+            }
+            // Bấm ra ngoài khung = khoanh lại từ đầu (bấm hụt thì trả khung cũ).
+            previousRect = model.currentRect
+            model.adjusting = false
+            model.hoverButton = nil
+            window?.invalidateCursorRects(for: self)
+            NSCursor.crosshair.set()
+        }
+        grab = nil
+        startPoint = p
         model.cursor = startPoint ?? .zero
         model.currentRect = .zero
         model.dragging = false
@@ -410,9 +618,28 @@ final class SelectionEventView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard let start = startPoint else { return }
-        model.cursor = convert(event.locationInWindow, from: nil)
+        let p = convert(event.locationInWindow, from: nil)
         freeMode = event.modifierFlags.contains(.option)
+        switch grab {
+        case .move:
+            model.cursor = p
+            // Toạ độ bấm ban đầu nằm trong grabRect; lệch bao nhiêu thì dời bấy nhiêu.
+            let start = startPointForGrab ?? p
+            model.currentRect = moved(by: p.x - start.x, p.y - start.y)
+            return
+        case .resize(let e):
+            model.cursor = p
+            model.currentRect = resized(e, to: p)
+            return
+        case .button(let b):
+            model.cursor = p
+            model.hoverButton = button(at: p) == b ? b : nil
+            return
+        case nil:
+            break
+        }
+        guard let start = startPoint else { return }
+        model.cursor = p
         // Bấm chuột bao giờ cũng xê vài pixel (trackpad càng rõ). Chỉ tính là KÉO
         // khi vượt ngưỡng — chưa vượt thì giữ nguyên `hover`, để thả ra vẫn chụp
         // được đúng cửa sổ đang khoanh thay vì bị huỷ.
@@ -434,20 +661,56 @@ final class SelectionEventView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        if let g = grab {
+            grab = nil
+            startPointForGrab = nil
+            model.dragging = false
+            model.guideXs = []; model.guideYs = []
+            if case .button(let b) = g {
+                let p = convert(event.locationInWindow, from: nil)
+                guard button(at: p) == b else { return }   // kéo ra ngoài nút = thôi
+                if b == .confirm { confirm() } else { onCancel?() }
+                return
+            }
+            // Chỉnh cỡ tới mức dẹp lép → trả lại khung trước đó.
+            if model.currentRect.width < 5 || model.currentRect.height < 5 {
+                model.currentRect = grabRect
+            }
+            updateAdjustCursor()
+            return
+        }
+        startPoint = nil
         if model.dragging, model.currentRect.width >= 5, model.currentRect.height >= 5 {
-            onSelected?(model.currentRect)
+            enterAdjust(model.currentRect)
         } else if let hover = model.hover {
-            // Bấm 1 phát (không kéo) lên vùng đang được khoanh → chụp đúng vùng đó.
-            onSelected?(hover.rect)
+            // Bấm 1 phát (không kéo) lên vùng đang được khoanh → khoanh đúng vùng đó.
+            enterAdjust(hover.rect)
+        } else if previousRect.width >= 5 {
+            enterAdjust(previousRect)   // bấm hụt ra ngoài khung đang chỉnh → giữ khung cũ
         } else {
             onCancel?()          // bấm hụt vào chỗ trống = huỷ, như trước
         }
+        previousRect = .zero
     }
 
     override func rightMouseDown(with event: NSEvent) { onCancel?() }
 
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 { onCancel?() }  // 53 = phím ESC
+        switch event.keyCode {
+        case 53:                                  // ⎋ = thoát hẳn, không lùi từng bước
+            onCancel?()
+        case 36, 76:                              // ↩ / enter = chụp khung đang chỉnh
+            if model.adjusting { confirm() }
+        case 123, 124, 125, 126 where model.adjusting:
+            // Mũi tên dời khung 1pt, giữ ⇧ thì 10pt.
+            let step: CGFloat = event.modifierFlags.contains(.shift) ? 10 : 1
+            let dx: CGFloat = event.keyCode == 123 ? -step : event.keyCode == 124 ? step : 0
+            let dy: CGFloat = event.keyCode == 126 ? -step : event.keyCode == 125 ? step : 0
+            grabRect = model.currentRect
+            model.currentRect = moved(by: dx, dy)
+        default:
+            break
+        }
     }
 }
 
@@ -463,7 +726,13 @@ final class SelectionEventView: NSView {
 final class RegionSelectionController {
     private var window: OverlayPanel?
 
-    func begin(on screen: NSScreen, frozen: CGImage? = nil, completion: @escaping (CGRect?) -> Void) {
+    private var escMonitor: Any?
+
+    /// `confirmTitle` / `confirmIcon`: chữ trên nút xác nhận ở bước chỉnh khung
+    /// ("Capture", "Start Recording"…).
+    func begin(on screen: NSScreen, frozen: CGImage? = nil,
+               confirmTitle: String = "Capture", confirmIcon: String = "camera.fill",
+               completion: @escaping (CGRect?) -> Void) {
         let size = screen.frame.size
         let model = SelectionModel()
         // Tỉ lệ point→pixel lấy từ chính ảnh đóng băng (khớp với ảnh sẽ cắt ra),
@@ -472,6 +741,8 @@ final class RegionSelectionController {
             ?? screen.backingScaleFactor
         model.frozen = frozen
         model.snapEnabled = AppSettings.shared.snapToEdges
+        model.confirmTitle = confirmTitle
+        model.confirmIcon = confirmIcon
         model.hintText = model.snapEnabled
             ? "Drag to capture · click a highlighted area · ⌥ free · esc"
             : "Drag to capture · esc to cancel"
@@ -529,6 +800,15 @@ final class RegionSelectionController {
         view.onSelected = { rect in finishOnce(rect) }
         view.onCancel = { finishOnce(nil) }
 
+        // Lưới an toàn cho ⎋: có lúc view mất first responder (bấm trúng lớp
+        // khác, panel khác thành key…) và keyDown không tới nữa — ⎋ vẫn phải
+        // thoát được, không thì người dùng kẹt dưới một lớp phủ kín màn hình.
+        escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.keyCode == 53 else { return event }
+            MainActor.assumeIsolated { finishOnce(nil) }
+            return nil
+        }
+
         if frozen == nil {
             // Không có ảnh đóng băng (fallback): hiện ở alpha 0 rồi fade nhanh,
             // nếu order-front thẳng ở alpha 1 sẽ lộ 1 frame ĐEN trước khi view vẽ.
@@ -561,6 +841,8 @@ final class RegionSelectionController {
     }
 
     private func cleanup() {
+        if let escMonitor { NSEvent.removeMonitor(escMonitor) }
+        escMonitor = nil
         window?.orderOut(nil)
         window = nil
     }

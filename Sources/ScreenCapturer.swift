@@ -173,7 +173,10 @@ final class ScreenCapturer: ObservableObject {
         let frozen = try? await captureDisplay(on: screen)
 
         let rect: CGRect? = await withCheckedContinuation { cont in
-            selection.begin(on: screen, frozen: frozen) { cont.resume(returning: $0) }
+            selection.begin(on: screen, frozen: frozen,
+                            confirmTitle: "Read Text", confirmIcon: "text.viewfinder") {
+                cont.resume(returning: $0)
+            }
         }
         guard let rect else { lastStatus = "Text capture cancelled."; return }
 
@@ -261,7 +264,11 @@ final class ScreenCapturer: ObservableObject {
         let frozen = try? await captureDisplay(on: screen)
 
         let rect: CGRect? = await withCheckedContinuation { cont in
-            selection.begin(on: screen, frozen: frozen) { cont.resume(returning: $0) }
+            selection.begin(on: screen, frozen: frozen,
+                            confirmTitle: "Start Scrolling Capture",
+                            confirmIcon: "arrow.up.and.down.text.horizontal") {
+                cont.resume(returning: $0)
+            }
         }
         guard let rect else { lastStatus = "Scrolling capture cancelled."; return }
         try? await Task.sleep(nanoseconds: 150_000_000)
@@ -313,8 +320,13 @@ final class ScreenCapturer: ObservableObject {
 
         // Kéo chuột chọn vùng (tái dùng overlay của chụp ảnh, có cả bắt dính).
         let frozen = try? await captureDisplay(on: screen)
+        // Kéo xong chưa quay ngay: khung ở lại để chỉnh, bấm "Start Recording"
+        // (hoặc ↩) mới bắt đầu.
         let rect: CGRect? = await withCheckedContinuation { cont in
-            selection.begin(on: screen, frozen: frozen) { cont.resume(returning: $0) }
+            selection.begin(on: screen, frozen: frozen,
+                            confirmTitle: "Start Recording", confirmIcon: "record.circle") {
+                cont.resume(returning: $0)
+            }
         }
         guard let rect else { lastStatus = "Recording cancelled."; return }
 
