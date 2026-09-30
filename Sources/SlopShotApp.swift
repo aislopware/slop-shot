@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMainMenu()
         registerHotkeys()
+        UpdateRelauncher.install()
         // Cài mới: xin quyền ngay lúc mở app, để SlopShot có sẵn trong danh sách
         // Screen Recording thay vì phải tự bấm + thêm vào.
         if !SystemPermission.screenRecording.isGranted {
