@@ -124,6 +124,15 @@ private struct CaptureTab: View {
             Section("After capture") {
                 Toggle("Also copy to clipboard", isOn: $settings.copyToClipboard)
                 Toggle("Show preview thumbnail", isOn: $settings.showThumbnail)
+                Picker("Preview position", selection: $settings.previewSide) {
+                    ForEach(AppSettings.PreviewSide.allCases) { side in
+                        Text(side.label).tag(side)
+                    }
+                }
+                .disabled(!settings.showThumbnail)
+                Text("Right-handed? Put the preview on the right, closer to where your mouse already is.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Color picker") {

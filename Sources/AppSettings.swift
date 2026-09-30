@@ -121,6 +121,14 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    // Góc màn hình mà thẻ preview hiện ra sau khi chụp. Mặc định trái (như
+    // CleanShot); người tay phải để chuột bên phải thì kéo thẻ ra từ góc phải gần hơn.
+    enum PreviewSide: String, CaseIterable, Identifiable {
+        case left, right
+        var id: String { rawValue }
+        var label: String { self == .left ? "Bottom left" : "Bottom right" }
+    }
+
     // Thư mục lưu (lưu dạng path, expand ~ khi dùng). App không sandbox nên path trần là đủ.
     @Published var saveFolderPath: String { didSet { d.set(saveFolderPath, forKey: K.folder) } }
     @Published var copyToClipboard: Bool   { didSet { d.set(copyToClipboard, forKey: K.copy) } }
@@ -135,6 +143,11 @@ final class AppSettings: ObservableObject {
     @Published var redactScanOnOpen: Bool  { didSet { d.set(redactScanOnOpen, forKey: K.redact) } }
     // OCR ngầm mỗi ảnh chụp rồi lưu chữ vào lịch sử → tìm ảnh cũ bằng nội dung.
     @Published var indexCaptureText: Bool  { didSet { d.set(indexCaptureText, forKey: K.index) } }
+
+    @Published var previewSide: PreviewSide { didSet { d.set(previewSide.rawValue, forKey: K.side) } }
+    // Ẩn icon trên thanh menu. Mở lại Settings bằng cách mở SlopShot lần nữa
+    // (Spotlight / Finder) — app đang chạy sẽ nhận "reopen" và bật cửa sổ Settings.
+    @Published var showMenuBarIcon: Bool   { didSet { d.set(showMenuBarIcon, forKey: K.menuIcon) } }
 
     // Không lưu UserDefaults — SMAppService.mainApp.status mới là nguồn sự thật
     // (user có thể tắt thủ công trong System Settings > Login Items).
@@ -192,6 +205,7 @@ final class AppSettings: ObservableObject {
         static let thumb = "save.thumb", format = "save.format", hotkeys = "hotkeys"
         static let snap = "select.snap", color = "pick.color.format"
         static let redact = "editor.redact.scan", index = "history.index.text"
+        static let side = "preview.side", menuIcon = "menubar.icon"
     }
 
     private init() {
@@ -206,6 +220,8 @@ final class AppSettings: ObservableObject {
         colorFormat     = ColorFormat(rawValue: d.string(forKey: K.color) ?? "hex") ?? .hex
         redactScanOnOpen = (d.object(forKey: K.redact) as? Bool) ?? true
         indexCaptureText = (d.object(forKey: K.index) as? Bool) ?? true
+        previewSide     = PreviewSide(rawValue: d.string(forKey: K.side) ?? "left") ?? .left
+        showMenuBarIcon = (d.object(forKey: K.menuIcon) as? Bool) ?? true
         if let raw = d.data(forKey: K.hotkeys),
            let saved = try? JSONDecoder().decode([String: Hotkey].self, from: raw) {
             hotkeyStore = saved

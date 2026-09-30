@@ -208,10 +208,11 @@ final class ThumbnailController {
                           height: ThumbnailCard.card.height + pad * 2)
 
         guard let screen = NSScreen.main else { return }
+        side = AppSettings.shared.previewSide
         let margin: CGFloat = 24
-        let origin = NSPoint(x: screen.visibleFrame.minX + margin,
-                             y: screen.visibleFrame.minY + margin)   // góc dưới-trái
-        let frame = NSRect(origin: origin, size: size)
+        let vf = screen.visibleFrame
+        let x = side == .right ? vf.maxX - margin - size.width : vf.minX + margin
+        let frame = NSRect(origin: NSPoint(x: x, y: vf.minY + margin), size: size)
 
         let hover = HoverModel()
         let card = ThumbnailCard(
@@ -244,9 +245,9 @@ final class ThumbnailController {
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         p.contentView = host
 
-        // Trượt VÀO từ mép trái (đối xứng với lúc đóng trượt ra) + fade.
+        // Trượt VÀO từ mép màn gần nhất (đối xứng với lúc đóng trượt ra) + fade.
         var startFrame = frame
-        startFrame.origin.x -= frame.width + 40   // bắt đầu ngoài mép trái
+        startFrame.origin.x += offscreenShift(frame.width)   // bắt đầu ngoài mép
         p.setFrame(startFrame, display: false)
         p.alphaValue = 0
         p.orderFrontRegardless()
@@ -268,7 +269,13 @@ final class ThumbnailController {
         panel = nil
     }
 
-    // Trượt panel sang trái khỏi màn rồi ẩn hẳn (dùng cho Copy / Edit / Discard).
+    // Thẻ ở góc nào thì trượt ra/vào qua mép bên đó.
+    private var side: AppSettings.PreviewSide = .left
+    private func offscreenShift(_ width: CGFloat) -> CGFloat {
+        side == .right ? width + 40 : -(width + 40)
+    }
+
+    // Trượt panel ra khỏi mép màn rồi ẩn hẳn (dùng cho Copy / Edit / Discard).
     func dismiss(slide: Bool) {
         dismissTask?.cancel(); dismissTask = nil
         guard slide, let p = panel else { hide(); return }
@@ -276,7 +283,7 @@ final class ThumbnailController {
             ctx.duration = 0.28
             ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
             var f = p.frame
-            f.origin.x -= f.width + 40   // ra hẳn ngoài mép trái
+            f.origin.x += self.offscreenShift(f.width)   // ra hẳn ngoài mép
             p.animator().setFrame(f, display: true)
             p.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
