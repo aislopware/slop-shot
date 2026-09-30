@@ -4,6 +4,27 @@ Sinh từ commit log bằng [git-cliff](https://git-cliff.org). Mục nào nằm
 loại (type) của commit quyết định — tức quyết định lúc VIẾT commit, không phải lúc cắt
 release. Quy ước được `scripts/check-commit-msg.sh` chặn ngay ở hook commit-msg.
 
+## [0.4.0](https://github.com/aislopware/slop-shot/compare/v0.3.0...v0.4.0) — 2026-09-30
+
+### Features
+
+- Add a setting to show the preview card bottom-right ([`ce61712`](https://github.com/aislopware/slop-shot/commit/ce61712352d3e220f802d6230d06fe8db1a48cb9))
+- Add an option to hide the menu bar icon ([`976f678`](https://github.com/aislopware/slop-shot/commit/976f6789f566a0e7827834b84581103a644d9cfd))
+- Turn off the macOS screenshot shortcuts in one click ([`7737e27`](https://github.com/aislopware/slop-shot/commit/7737e2778fa3027cb50196d271780d522bd01194))
+- Default to ⌘⇧1–6 in menu order ([`3ba462f`](https://github.com/aislopware/slop-shot/commit/3ba462feda00b18b4bbb85521b0d60cdbca987bf))
+- Adjust the selection, then confirm to capture or record ([`3a3803f`](https://github.com/aislopware/slop-shot/commit/3a3803f85478990485c02f0bc4d674e682489a3b))
+
+### Bug fixes
+
+- Keep overlay buttons readable when macOS is in light mode ([`a909f36`](https://github.com/aislopware/slop-shot/commit/a909f36c38caa61b3687a8864cd41e7683d6ab62))
+- Add SlopShot to the privacy list before opening it ([`eb75092`](https://github.com/aislopware/slop-shot/commit/eb750929b5e153bd29341daef1ad76abaf1f5772))
+- Make ⌘Q close the open window instead of quitting ([`c28d9eb`](https://github.com/aislopware/slop-shot/commit/c28d9ebedaa099c0dc84254d8e197086c546de08))
+- Show the result window in front of the active app ([`87af7b9`](https://github.com/aislopware/slop-shot/commit/87af7b9f49641336998d88f3184b201ee8d18a82))
+
+### Tooling
+
+- Install the better-update CLI with install.sh ([`8921345`](https://github.com/aislopware/slop-shot/commit/892134543aa1d67cadbe67a24f21130328f2ae05))
+
 ## [0.3.0](https://github.com/aislopware/slop-shot/compare/v0.2.0...v0.3.0) — 2026-08-25
 
 ### Features
