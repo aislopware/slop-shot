@@ -4,6 +4,12 @@ Sinh từ commit log bằng [git-cliff](https://git-cliff.org). Mục nào nằm
 loại (type) của commit quyết định — tức quyết định lúc VIẾT commit, không phải lúc cắt
 release. Quy ước được `scripts/check-commit-msg.sh` chặn ngay ở hook commit-msg.
 
+## [0.4.1](https://github.com/aislopware/slop-shot/compare/v0.4.0...v0.4.1) — 2026-09-30
+
+### Bug fixes
+
+- List SlopShot in Screen Recording on a fresh install ([`6d32eec`](https://github.com/aislopware/slop-shot/commit/6d32eecfb043e4addd37c91c8472955fc4d88d7e))
+
 ## [0.4.0](https://github.com/aislopware/slop-shot/compare/v0.3.0...v0.4.0) — 2026-09-30
 
 ### Features
