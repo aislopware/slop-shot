@@ -47,9 +47,10 @@ struct Hotkey: Codable, Equatable {
 
 // ─────────────────────────────────────────────────────────────────────────
 // Các hành động có thể gán phím tắt. Mỗi cái có tiêu đề + phím mặc định.
+// Thứ tự case = thứ tự trong menu = ⌘⇧1…6 — nhìn menu là đoán ra phím.
 // ─────────────────────────────────────────────────────────────────────────
 enum ShortcutAction: String, CaseIterable, Identifiable {
-    case captureArea, captureFullscreen, recordArea, captureText, captureScrolling, pickColor
+    case captureArea, captureFullscreen, captureScrolling, captureText, pickColor, recordArea
     var id: String { rawValue }
 
     var title: String {
@@ -63,15 +64,17 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         }
     }
 
+    // ⌘⇧3/4/5 trùng phím chụp của macOS — macOS thắng cho tới khi tắt bên đó
+    // (Settings > Shortcuts > "Turn off macOS shortcuts").
     var defaultHotkey: Hotkey {
-        let mods = UInt32(controlKey | optionKey | cmdKey)   // ⌃⌥⌘
+        let mods = UInt32(shiftKey | cmdKey)   // ⌘⇧
         switch self {
-        case .captureArea:      return Hotkey(keyCode: 21, modifiers: mods)   // 4
-        case .captureFullscreen:return Hotkey(keyCode: 20, modifiers: mods)   // 3
-        case .recordArea:       return Hotkey(keyCode: 23, modifiers: mods)   // 5
-        case .captureText:      return Hotkey(keyCode: 22, modifiers: mods)   // 6
-        case .captureScrolling: return Hotkey(keyCode: 26, modifiers: mods)   // 7
-        case .pickColor:        return Hotkey(keyCode: 28, modifiers: mods)   // 8
+        case .captureArea:      return Hotkey(keyCode: 18, modifiers: mods)   // 1
+        case .captureFullscreen:return Hotkey(keyCode: 19, modifiers: mods)   // 2
+        case .captureScrolling: return Hotkey(keyCode: 20, modifiers: mods)   // 3
+        case .captureText:      return Hotkey(keyCode: 21, modifiers: mods)   // 4
+        case .pickColor:        return Hotkey(keyCode: 23, modifiers: mods)   // 5
+        case .recordArea:       return Hotkey(keyCode: 22, modifiers: mods)   // 6
         }
     }
 }

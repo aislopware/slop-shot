@@ -340,7 +340,7 @@ final class ScreenCapturer: ObservableObject {
                 y: screen.frame.minY + (screen.frame.height - rect.maxY),
                 width: rect.width, height: rect.height)
             clickEffect.start(in: globalRegion)
-            lastStatus = "🔴 Recording… click ⏹ (or ⌃⌥⌘5) to stop."
+            lastStatus = "🔴 Recording… click ⏹ (or \(settings.hotkey(for: .recordArea).display)) to stop."
         } catch {
             recordingOverlay.hide()
             lastStatus = "❌ Couldn't start recording: \(error.localizedDescription)"
