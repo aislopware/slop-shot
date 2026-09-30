@@ -517,6 +517,7 @@ final class RegionSelectionController {
                                defer: false)
         win.level = .screenSaver          // nằm trên cả menu bar
         win.backgroundColor = .clear
+        win.appearance = NSAppearance(named: .darkAqua)   // HUD nền tối cố định → chữ/nút hệ thống cũng phải tông tối, kể cả khi máy để Light
         win.isOpaque = false
         win.hasShadow = false
         win.animationBehavior = .none     // hiện tức thì: ảnh đóng băng phải trùng khít màn hình

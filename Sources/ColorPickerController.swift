@@ -270,6 +270,7 @@ final class ColorPickerController {
                                backing: .buffered, defer: false)
         win.level = .screenSaver
         win.backgroundColor = .clear
+        win.appearance = NSAppearance(named: .darkAqua)   // HUD nền tối cố định → chữ/nút hệ thống cũng phải tông tối, kể cả khi máy để Light
         win.isOpaque = false
         win.hasShadow = false
         win.animationBehavior = .none

@@ -113,6 +113,7 @@ final class RecordingBarController {
                         backing: .buffered, defer: false)
         p.level = .floating
         p.backgroundColor = .clear
+        p.appearance = NSAppearance(named: .darkAqua)   // HUD nền tối cố định → chữ/nút hệ thống cũng phải tông tối, kể cả khi máy để Light
         p.isOpaque = false
         p.hasShadow = true
         p.isMovableByWindowBackground = true   // kéo nền để di chuyển thanh
