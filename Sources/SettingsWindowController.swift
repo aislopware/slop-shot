@@ -221,6 +221,7 @@ private struct PermissionsSection: View {
                     .foregroundStyle(ok ? Color.green : Color.orange)
                     .labelStyle(.titleAndIcon)
                 Button("Open…") { p.openSystemSettings() }
+                    .help("Adds SlopShot to the list in System Settings — just switch it on.")
             }
             // Screen Recording bật xong vẫn chưa dùng được: macOS chỉ cấp cho
             // tiến trình MỚI. Không nói ra thì người ta bật rồi chụp tiếp, vẫn

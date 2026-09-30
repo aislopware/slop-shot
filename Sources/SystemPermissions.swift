@@ -59,9 +59,56 @@ enum SystemPermission: String, CaseIterable, Identifiable {
         }
     }
 
+    /// Tên dịch vụ TCC mà `tccutil` hiểu.
+    private var tccService: String {
+        switch self {
+        case .screenRecording: return "ScreenCapture"
+        case .accessibility:   return "Accessibility"
+        }
+    }
+
+    /// Mở đúng trang trong System Settings — và nếu quyền đang tắt thì làm cho
+    /// SlopShot CÓ MẶT sẵn trong danh sách ở trang đó.
+    ///
+    /// macOS chỉ thêm app vào danh sách khi app XIN quyền. Chỉ mở trang thôi thì
+    /// thường không thấy SlopShot đâu (cài đè bản mới là dòng cũ bị dọn), người
+    /// dùng phải tự bấm + đi tìm file .app. Còn một ca xấu hơn: dòng cũ còn đó,
+    /// công tắc bật, nhưng thuộc về chữ ký của bản build trước → không có tác
+    /// dụng gì với bản đang chạy. Nên: xoá dòng của CHÍNH app này (không cần quyền
+    /// admin), xin lại để macOS ghi một dòng mới đúng chữ ký, rồi mới mở trang —
+    /// người dùng chỉ còn việc gạt công tắc.
     func openSystemSettings() {
+        if !isGranted {
+            resetOwnEntry()
+            requestAccess()
+        }
         guard let url = URL(string:
             "x-apple.systempreferences:com.apple.preference.security?\(pane)") else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    private func requestAccess() {
+        switch self {
+        case .screenRecording:
+            _ = CGRequestScreenCaptureAccess()
+        case .accessibility:
+            let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+            _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
+        }
+    }
+
+    private func resetOwnEntry() {
+        guard let bundleID = Bundle.main.bundleIdentifier else { return }
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        task.arguments = ["reset", tccService, bundleID]
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        do {
+            try task.run()
+            task.waitUntilExit()
+        } catch {
+            NSLog("SlopShot: tccutil reset \(tccService) failed: \(error)")
+        }
     }
 }
