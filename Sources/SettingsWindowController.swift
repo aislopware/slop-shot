@@ -290,8 +290,67 @@ private struct ShortcutsTab: View {
             Text("Click a shortcut, then press the new key combo (needs at least one of ⌃⌥⇧⌘). Press ⎋ to cancel.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            SystemShortcutsSection(settings: settings)
         }
         .formStyle(.grouped)
+    }
+}
+
+// Một nút giành ⌘⇧3/4/5 từ macOS (và một nút trả lại).
+private struct SystemShortcutsSection: View {
+    @ObservedObject var settings: AppSettings
+    /// Người dùng có thể bật lại ở System Settings bất cứ lúc nào → đọc lại
+    /// mỗi khi quay về app, không tin trạng thái cũ.
+    @State private var systemOn = SystemScreenshotShortcuts.systemShortcutsEnabled
+
+    /// Phím SlopShot đang bị macOS nuốt mất.
+    private var blocked: [ShortcutAction] {
+        guard systemOn else { return [] }
+        return ShortcutAction.allCases.filter {
+            SystemScreenshotShortcuts.reserved.contains(settings.hotkey(for: $0))
+        }
+    }
+
+    var body: some View {
+        Section("macOS screenshot shortcuts") {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(systemOn ? "macOS still owns ⌘⇧3, ⌘⇧4 and ⌘⇧5"
+                                  : "⌘⇧3, ⌘⇧4 and ⌘⇧5 go to SlopShot")
+                    if !blocked.isEmpty {
+                        Label("Not working until you turn them off: "
+                              + blocked.map(\.title).joined(separator: ", "),
+                              systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    } else {
+                        Text("Turns off Apple's screenshot shortcuts in System Settings › Keyboard so SlopShot gets them.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 8)
+                if systemOn {
+                    Button("Turn off macOS shortcuts") {
+                        SystemScreenshotShortcuts.turnOffSystem()
+                        refresh()
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else {
+                    Button("Restore macOS") {
+                        SystemScreenshotShortcuts.restoreSystem()
+                        refresh()
+                    }
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.didBecomeActiveNotification)) { _ in refresh() }
+    }
+
+    private func refresh() {
+        systemOn = SystemScreenshotShortcuts.systemShortcutsEnabled
     }
 }
 
