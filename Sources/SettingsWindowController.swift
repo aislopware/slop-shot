@@ -68,6 +68,12 @@ private struct GeneralTab: View {
                     get: { settings.launchAtLogin },
                     set: { settings.setLaunchAtLogin($0) }
                 ))
+                Toggle("Show icon in menu bar", isOn: $settings.showMenuBarIcon)
+                if !settings.showMenuBarIcon {
+                    Text("Hotkeys keep working. To get back here, open SlopShot again from Spotlight or Finder.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section("Save location") {

@@ -55,6 +55,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = mainMenu
     }
 
+    // Icon trên thanh menu đã ẩn thì đây là cửa duy nhất vào lại Settings: mở
+    // SlopShot lần nữa (Spotlight, Finder, `open -a`) khi nó đang chạy → macOS
+    // gửi "reopen" → bật cửa sổ Settings.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        capturer.showSettings()
+        return false
+    }
+
+    @objc private func closeKeyWindow(_ sender: Any?) {
+        guard let win = NSApp.keyWindow ?? NSApp.mainWindow else { return }
+        // Editor ẩn nút đóng; performClose vẫn đi qua delegate (hỏi lưu…) nếu
+        // cửa sổ có .closable, không thì đóng thẳng.
+        if win.styleMask.contains(.closable) { win.performClose(nil) } else { win.close() }
+    }
+
     // Đăng ký TẤT CẢ phím tắt theo cấu hình hiện tại (gỡ hết rồi gắn lại).
     private func registerHotkeys() {
         let mgr = HotKeyManager.shared
@@ -85,12 +100,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct SlopShotApp: App {
     // Gắn AppDelegate vào app SwiftUI. SwiftUI tạo & giữ nó giúp mình.
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    // Công tắc ẩn/hiện icon trên thanh menu (Settings > General).
+    @ObservedObject private var settings = AppSettings.shared
 
     var body: some Scene {
         // MenuBarExtra = icon trên thanh menu + menu xổ xuống.
         // Không còn WindowGroup -> app không có cửa sổ chính, chạy nền hoàn toàn.
         // image: "MenuBarIcon" = asset template (chữ S) → macOS tự tô đen/trắng theo nền.
-        MenuBarExtra("SlopShot", image: "MenuBarIcon") {
+        // Binding chỉ GHI khi giá trị thật sự đổi: MenuBarExtra ghi ngược vào
+        // isInserted mỗi lần cập nhật, mà @Published ghi trùng giá trị vẫn phát
+        // thay đổi → body chạy lại → ghi tiếp… treo cứng (lộ rõ nhất khi mở
+        // Settings, vì cửa sổ đó cũng bám AppSettings).
+        MenuBarExtra("SlopShot", image: "MenuBarIcon", isInserted: Binding(
+            get: { settings.showMenuBarIcon },
+            set: { if settings.showMenuBarIcon != $0 { settings.showMenuBarIcon = $0 } }
+        )) {
             MenuContent(capturer: appDelegate.capturer)
         }
     }
