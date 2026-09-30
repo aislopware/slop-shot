@@ -49,7 +49,7 @@ struct VideoEditorView: View {
             topBar
         }
         .frame(minWidth: 940, minHeight: 640)
-        .background(Color(white: 0.11))
+        .background(Theme.surface)
         .ignoresSafeArea()
         .task { await store.load() }
         .onAppear { installKeyMonitor() }
@@ -89,7 +89,7 @@ struct VideoEditorView: View {
         .padding(.horizontal, 14)
         .frame(height: barHeight)
         .frame(maxWidth: .infinity)
-        .background(Color(white: 0.13))
+        .background(Theme.surfaceRaised)
         .overlay(alignment: .bottom) {
             Rectangle().fill(.white.opacity(0.08)).frame(height: 1)
         }
@@ -123,7 +123,7 @@ struct VideoEditorView: View {
             .frame(height: 28)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.hud)
         .foregroundStyle(Color(white: 0.86))
         .help(hint(for: kind))
     }
@@ -141,8 +141,8 @@ struct VideoEditorView: View {
             .frame(height: 30)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+        .buttonStyle(.hud)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: Theme.Radius.control))
         .disabled(store.clicks.isEmpty)
         .help(store.clicks.isEmpty
               ? "No clicks were recorded for this take"
@@ -158,8 +158,8 @@ struct VideoEditorView: View {
                 .frame(width: 30, height: 30)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+        .buttonStyle(.hud)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: Theme.Radius.control))
         .help(tip)
     }
 
@@ -188,7 +188,7 @@ struct VideoEditorView: View {
                     ProgressView(value: p).frame(width: 260)
                 }
                 .padding(24)
-                .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 12))
+                .hudBackground(radius: Theme.Radius.panel)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -205,7 +205,7 @@ struct VideoEditorView: View {
                     .frame(width: 26, height: 26)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.hud)
             .help("Play / Pause (Space)")
 
             Button { store.goToStart() } label: {
@@ -215,7 +215,7 @@ struct VideoEditorView: View {
                     .frame(width: 26, height: 26)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.hud)
             .help("Back to the start of the trim")
 
             Text("\(VideoEditStore.timecode(store.compTime)) / \(VideoEditStore.timecode(store.compDuration))")
@@ -230,7 +230,7 @@ struct VideoEditorView: View {
         }
         .padding(.horizontal, 14)
         .frame(height: 36)
-        .background(Color(white: 0.13))
+        .background(Theme.surfaceRaised)
         .overlay(alignment: .top) {
             Rectangle().fill(.white.opacity(0.08)).frame(height: 1)
         }
@@ -269,7 +269,7 @@ struct VideoEditorView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(width: inspectorWidth)
-        .background(Color(white: 0.13))
+        .background(Theme.surfaceRaised)
         .overlay(alignment: .leading) {
             Rectangle().fill(.white.opacity(0.08)).frame(width: 1)
         }
@@ -413,7 +413,7 @@ struct VideoEditorView: View {
         }
         .padding(.horizontal, 16)
         .frame(height: 52)
-        .background(Color(white: 0.13))
+        .background(Theme.surfaceRaised)
         .overlay(alignment: .top) {
             Rectangle().fill(.white.opacity(0.08)).frame(height: 1)
         }

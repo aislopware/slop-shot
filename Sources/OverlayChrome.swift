@@ -13,7 +13,18 @@ enum OverlayChrome {
     static let chipFill = Color(.sRGB, red: 0.08, green: 0.09, blue: 0.11, opacity: 0.92)
     static let chipEdge = Color.white.opacity(0.14)
     static let guide    = Color(.sRGB, red: 0.24, green: 0.86, blue: 0.79, opacity: 1)
-    static let radius: CGFloat = 8
+    static let radius = Theme.Radius.control
+
+    /// Đóng lớp phủ: mờ dần (huỷ) hoặc tắt ngay (đã chọn xong).
+    @MainActor
+    static func close(_ win: NSWindow, fade: Bool) {
+        guard fade else { win.orderOut(nil); return }
+        win.ignoresMouseEvents = true
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.12
+            win.animator().alphaValue = 0
+        }, completionHandler: { win.orderOut(nil) })
+    }
 
     // ── Chip ─────────────────────────────────────────────────────────────
 
@@ -174,8 +185,9 @@ struct LoupeView: View {
             }
             .frame(width: side, height: side)
             .background(Color(white: 0.08))
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(OverlayChrome.chipEdge, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.panel, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.panel, style: .continuous)
+                .strokeBorder(OverlayChrome.chipEdge, lineWidth: 1))
             .shadow(color: .black.opacity(0.55), radius: 8)
         }
     }
@@ -199,8 +211,7 @@ struct OverlayHint: View {
         }
         .padding(.horizontal, 22)
         .padding(.vertical, 15)
-        .background(OverlayChrome.chipFill, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(OverlayChrome.chipEdge, lineWidth: 1))
+        .hudBackground(radius: Theme.Radius.panel, blending: .withinWindow)
     }
 }
 
@@ -223,8 +234,7 @@ struct ToolBadge: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 7)
-                .background(OverlayChrome.chipFill, in: Capsule())
-                .overlay(Capsule().stroke(OverlayChrome.chipEdge, lineWidth: 1))
+                .hudBackground(radius: 16, blending: .withinWindow)
                 .shadow(color: .black.opacity(0.4), radius: 6)
                 .opacity(near ? 0.15 : 1)
                 .animation(.easeOut(duration: 0.12), value: near)

@@ -119,7 +119,12 @@ final class RecordingBarController {
         p.isMovableByWindowBackground = true   // kéo nền để di chuyển thanh
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         p.contentView = host
+        p.alphaValue = 0
         p.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.18
+            p.animator().alphaValue = 1
+        }
 
         self.panel = p
         model.startTimer()
@@ -129,8 +134,12 @@ final class RecordingBarController {
 
     func hide() {
         model.stopTimer()
-        panel?.orderOut(nil)
+        guard let p = panel else { return }
         panel = nil
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.15
+            p.animator().alphaValue = 0
+        }, completionHandler: { p.orderOut(nil) })
     }
 }
 
@@ -144,10 +153,13 @@ private struct RecordingBarView: View {
                 model.onStop?()
             }
 
+            RecDot(paused: model.paused)
+
+            // Rộng đủ cho "100:00": khung cũ 40pt cắt chữ khi quay quá 9:59.
             Text(model.timecode)
                 .font(.system(size: 13, weight: .semibold).monospacedDigit())
                 .foregroundStyle(.white)
-                .frame(width: 40, alignment: .leading)
+                .frame(width: 50, alignment: .leading)
 
             Rectangle().fill(.white.opacity(0.18)).frame(width: 1, height: 20)
 
@@ -181,7 +193,7 @@ private struct RecordingBarView: View {
         }
         .padding(.horizontal, 10)
         .frame(height: 38)
-        .background(Color(white: 0.13).opacity(0.96), in: RoundedRectangle(cornerRadius: 11))
+        .hudBackground()
     }
 
     private func iconButton(_ symbol: String, _ tip: String,
@@ -191,10 +203,26 @@ private struct RecordingBarView: View {
             Image(systemName: symbol)
                 .font(.system(size: size * 0.55, weight: .semibold))
                 .foregroundStyle(tint)
-                .frame(width: size, height: size)
+                .frame(width: size + 4, height: size + 4)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.hud(radius: Theme.Radius.small))
         .help(tip)
+    }
+}
+
+/// Chấm đỏ "đang quay": thở nhẹ khi đang ghi, đứng yên màu vàng khi tạm dừng.
+private struct RecDot: View {
+    let paused: Bool
+    @State private var dim = false
+
+    var body: some View {
+        Circle()
+            .fill(paused ? Color(nsColor: .systemYellow) : Color(nsColor: .systemRed))
+            .frame(width: 8, height: 8)
+            .opacity(paused ? 1 : (dim ? 0.3 : 1))
+            .animation(paused ? .default : .easeInOut(duration: 0.8).repeatForever(), value: dim)
+            .onAppear { dim = true }
+            .help(paused ? "Paused" : "Recording")
     }
 }

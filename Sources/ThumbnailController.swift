@@ -51,7 +51,7 @@ private struct ThumbnailCard: View {
 
     static let pad: CGFloat = 14   // lề chừa cho bóng đổ
     static let card = CGSize(width: 210, height: 150)
-    private let radius: CGFloat = 13
+    private let radius = Theme.Radius.panel
 
     private var hovering: Bool { hover.hovering }
     @State private var pinned = false
@@ -67,12 +67,15 @@ private struct ThumbnailCard: View {
                 .aspectRatio(contentMode: .fill)
         }
         .frame(width: Self.card.width, height: Self.card.height)
-        .clipShape(RoundedRectangle(cornerRadius: radius))
+        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: radius).stroke(.white.opacity(0.22), lineWidth: 1)
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .strokeBorder(.white.opacity(0.22), lineWidth: 1)
         }
-        .overlay { if isVideo && !hovering { playBadge } }
-        .overlay { if hovering { controls } }
+        .overlay { if isVideo { playBadge.opacity(hovering ? 0 : 1) } }
+        // Luôn dựng sẵn, chỉ đổi độ mờ: hiện/ẩn bằng `if` thì nút bật ra cái bụp.
+        .overlay { controls.opacity(hovering ? 1 : 0).allowsHitTesting(hovering) }
+        .animation(Theme.quick, value: hovering)
         .shadow(color: .black.opacity(0.5), radius: 10, y: 6)
         .padding(Self.pad)
         .contentShape(RoundedRectangle(cornerRadius: radius))
@@ -128,7 +131,7 @@ private struct ThumbnailCard: View {
                     ShareLink(item: fileURL) {
                         circleLabel("square.and.arrow.up")
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressStyle())
                     .help("Share")
                 }
             }
@@ -158,13 +161,13 @@ private struct ThumbnailCard: View {
             .frame(width: 68, height: 23)
             .background(.white.opacity(0.92), in: Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressStyle())
     }
 
     private func circle(_ symbol: String, _ tip: String,
                         _ action: @escaping () -> Void) -> some View {
         Button(action: action) { circleLabel(symbol) }
-            .buttonStyle(.plain)
+            .buttonStyle(PressStyle())
             .help(tip)
     }
 
@@ -175,6 +178,26 @@ private struct ThumbnailCard: View {
             .frame(width: 24, height: 24)
             .background(.black.opacity(0.55), in: Circle())
             .contentShape(Circle())
+    }
+
+    /// Nút trên ảnh: rê chuột thì sáng lên, bấm thì lún — nền nút đã có sẵn
+    /// (vòng tròn đen, viên thuốc trắng) nên chỉ đổi độ sáng + cỡ.
+    private struct PressStyle: ButtonStyle {
+        func makeBody(configuration: Configuration) -> some View {
+            PressBody(configuration: configuration)
+        }
+        private struct PressBody: View {
+            let configuration: Configuration
+            @State private var hovering = false
+            var body: some View {
+                configuration.label
+                    .brightness(configuration.isPressed ? -0.08 : hovering ? 0.12 : 0)
+                    .scaleEffect(configuration.isPressed ? 0.92 : hovering ? 1.06 : 1)
+                    .animation(Theme.quick, value: hovering)
+                    .animation(Theme.quick, value: configuration.isPressed)
+                    .onHover { hovering = $0 }
+            }
+        }
     }
 
     // Rung nhẹ (chỉ trackpad Force Touch). React không có khái niệm này 😄
@@ -304,10 +327,8 @@ final class ThumbnailController {
         dismissTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             guard !Task.isCancelled else { return }
-            self?.panel?.animator().alphaValue = 0
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            guard !Task.isCancelled else { return }
-            self?.hide()
+            // Trượt ra y như lúc đóng bằng tay, không chỉ mờ đi tại chỗ.
+            self?.dismiss(slide: true)
         }
     }
 }

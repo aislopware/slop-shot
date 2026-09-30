@@ -385,9 +385,9 @@ private struct ShortcutRecorder: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(isRecording ? Color.accentColor.opacity(0.18)
                                         : Color(nsColor: .controlBackgroundColor),
-                            in: RoundedRectangle(cornerRadius: 5))
+                            in: RoundedRectangle(cornerRadius: Theme.Radius.small))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 5)
+                    RoundedRectangle(cornerRadius: Theme.Radius.small)
                         .stroke(isRecording ? Color.accentColor : Color(nsColor: .separatorColor),
                                 lineWidth: 1)
                 }

@@ -94,6 +94,9 @@ final class SelectionModel: ObservableObject {
 // ─────────────────────────────────────────────────────────────────────────
 struct SelectionOverlay: View {
     @ObservedObject var model: SelectionModel
+    /// Lớp tối + chữ mờ dần vào trên nền ảnh đóng băng (ảnh thì hiện tức thì —
+    /// nó trùng khít màn hình nên người dùng không thấy "cửa sổ mới" bật lên).
+    @State private var appeared = false
 
     private let loupeSide: CGFloat = 128
 
@@ -103,21 +106,26 @@ struct SelectionOverlay: View {
             ZStack(alignment: .topLeading) {
                 Canvas { ctx, size in paint(&ctx, size: size) }
 
-                if !model.interacted {
-                    OverlayHint(title: model.hintText, subtitle: hintSubtitle)
-                        .padding(.bottom, 96)
-                        .frame(width: geo.size.width, height: geo.size.height, alignment: .bottom)
-                }
+                // Luôn dựng sẵn, chỉ đổi độ mờ → ẩn/hiện mượt thay vì biến mất cái bụp.
+                OverlayHint(title: model.hintText, subtitle: hintSubtitle)
+                    .padding(.bottom, 96)
+                    .frame(width: geo.size.width, height: geo.size.height, alignment: .bottom)
+                    .opacity(model.interacted ? 0 : 1)
+                    .animation(Theme.quick, value: model.interacted)
 
                 ToolBadge(title: model.toolTitle, icon: model.toolIcon, cursor: model.cursor)
                 badge(in: bounds)
-                if model.adjusting, !model.dragging {
-                    actionBar(in: bounds)
-                }
+                let showBar = model.adjusting && !model.dragging
+                ZStack(alignment: .topLeading) { actionBar(in: bounds) }
+                    .opacity(showBar ? 1 : 0)
+                    .scaleEffect(showBar ? 1 : 0.96)
+                    .animation(Theme.quick, value: showBar)
                 loupe(in: bounds)
             }
         }
         .ignoresSafeArea()
+        .opacity(appeared ? 1 : 0)
+        .onAppear { withAnimation(.easeOut(duration: 0.12)) { appeared = true } }
     }
 
     // Hai nút cạnh khung: ✕ huỷ, ✓ chụp / bắt đầu quay. Chỉ để NHÌN — chuột
@@ -136,6 +144,7 @@ struct SelectionOverlay: View {
                         in: RoundedRectangle(cornerRadius: OverlayChrome.radius))
             .overlay(RoundedRectangle(cornerRadius: OverlayChrome.radius)
                 .stroke(cancelHot ? Color.white.opacity(0.5) : OverlayChrome.chipEdge, lineWidth: 1))
+            .animation(Theme.quick, value: cancelHot)
             .position(x: f.cancel.midX, y: f.cancel.midY)
 
         HStack(spacing: 6) {
@@ -149,6 +158,8 @@ struct SelectionOverlay: View {
                     in: RoundedRectangle(cornerRadius: OverlayChrome.radius))
         .overlay(RoundedRectangle(cornerRadius: OverlayChrome.radius)
             .stroke(Color.white.opacity(confirmHot ? 0.6 : 0.25), lineWidth: 1))
+        .scaleEffect(confirmHot ? 1.03 : 1)
+        .animation(Theme.quick, value: confirmHot)
         .position(x: f.confirm.midX, y: f.confirm.midY)
     }
 
@@ -814,7 +825,7 @@ final class RegionSelectionController {
         let finishOnce: (CGRect?) -> Void = { [weak self] rect in
             guard !finished else { return }
             finished = true
-            self?.cleanup()
+            self?.cleanup(fade: rect == nil)
             completion(rect)
         }
 
@@ -890,11 +901,13 @@ final class RegionSelectionController {
         }
     }
 
-    private func cleanup() {
+    /// `fade`: chỉ khi HUỶ. Chọn xong thì phải biến mất ngay — luồng sau (quay,
+    /// chụp cuộn) chụp màn hình sống, lớp phủ đang mờ dần sẽ lọt vào hình.
+    private func cleanup(fade: Bool = false) {
         if let escMonitor { NSEvent.removeMonitor(escMonitor) }
         escMonitor = nil
         cancelCurrent = nil
-        window?.orderOut(nil)
+        if let win = window { OverlayChrome.close(win, fade: fade) }
         window = nil
     }
 }

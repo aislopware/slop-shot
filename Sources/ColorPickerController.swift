@@ -91,8 +91,7 @@ struct ColorPickerOverlay: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 9)
-            .background(OverlayChrome.chipFill, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(OverlayChrome.chipEdge, lineWidth: 1))
+            .hudBackground(radius: Theme.Radius.bar, blending: .withinWindow)
             .position(x: x + size.width / 2, y: y + size.height / 2)
         }
     }
@@ -251,7 +250,7 @@ final class ColorPickerController {
         let finishOnce: (NSColor?) -> Void = { [weak self] color in
             guard !finished else { return }
             finished = true
-            self?.cleanup()
+            self?.cleanup(fade: color == nil)
             completion(color)
         }
 
@@ -291,8 +290,8 @@ final class ColorPickerController {
         self.window = win
     }
 
-    private func cleanup() {
-        window?.orderOut(nil)
+    private func cleanup(fade: Bool = false) {
+        if let win = window { OverlayChrome.close(win, fade: fade) }
         window = nil
     }
 }
