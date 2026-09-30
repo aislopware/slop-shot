@@ -29,14 +29,15 @@ enum TextRecognizer {
 
     // Đọc chữ + dò mã QR trong cùng 1 lượt.
     static func scan(in cgImage: CGImage) async -> OCRResult {
-        await withCheckedContinuation { cont in
+        await withCheckedContinuation { c in
+            let cont = ResumeOnce(c)
             // 1) Tạo "yêu cầu" nhận chữ. Callback chạy khi Vision xử lý xong.
             let request = VNRecognizeTextRequest { req, _ in
                 // Mỗi observation = 1 dòng chữ Vision tìm thấy; lấy ứng viên tốt nhất.
                 let lines = (req.results as? [VNRecognizedTextObservation] ?? [])
                     .compactMap { $0.topCandidates(1).first?.string }
-                cont.resume(returning: OCRResult(text: lines.joined(separator: "\n"),
-                                                 qrCodes: detectQRCodes(in: cgImage)))
+                cont.resume(OCRResult(text: lines.joined(separator: "\n"),
+                                      qrCodes: detectQRCodes(in: cgImage)))
             }
             // .accurate = ưu tiên độ chính xác hơn tốc độ (ảnh tĩnh nên chấp nhận chậm hơn).
             request.recognitionLevel = .accurate
@@ -52,7 +53,7 @@ enum TextRecognizer {
                 do {
                     try handler.perform([request])
                 } catch {
-                    cont.resume(returning: OCRResult(text: "", qrCodes: detectQRCodes(in: cgImage)))
+                    cont.resume(OCRResult(text: "", qrCodes: detectQRCodes(in: cgImage)))
                 }
             }
         }
@@ -62,9 +63,10 @@ enum TextRecognizer {
     // không chỉ lấy .string) vì chỉ nó mới hỏi được "đoạn con này nằm ở khung nào"
     // qua boundingBox(for:). SensitiveScanner cần đúng cái đó để úp ô blur.
     static func lines(in cgImage: CGImage) async -> [VNRecognizedText] {
-        await withCheckedContinuation { cont in
+        await withCheckedContinuation { c in
+            let cont = ResumeOnce(c)
             let request = VNRecognizeTextRequest { req, _ in
-                cont.resume(returning: (req.results as? [VNRecognizedTextObservation] ?? [])
+                cont.resume((req.results as? [VNRecognizedTextObservation] ?? [])
                     .compactMap { $0.topCandidates(1).first })
             }
             request.recognitionLevel = .accurate
@@ -73,7 +75,7 @@ enum TextRecognizer {
 
             let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
             DispatchQueue.global(qos: .userInitiated).async {
-                do { try handler.perform([request]) } catch { cont.resume(returning: []) }
+                do { try handler.perform([request]) } catch { cont.resume([]) }
             }
         }
     }
@@ -89,5 +91,24 @@ enum TextRecognizer {
         // Bỏ trùng nhưng giữ thứ tự.
         var seen = Set<String>()
         return found.filter { seen.insert($0).inserted }
+    }
+}
+
+// Vision lỗi thì có thể gọi CẢ completion của request LẪN nhánh catch của
+// perform() → continuation bị resume 2 lần → Swift chủ động crash cả app.
+// Bọc lại để lần thứ hai bị bỏ qua.
+private final class ResumeOnce<T>: @unchecked Sendable {
+    private let cont: CheckedContinuation<T, Never>
+    private let lock = NSLock()
+    private var done = false
+
+    init(_ cont: CheckedContinuation<T, Never>) { self.cont = cont }
+
+    func resume(_ value: T) {
+        lock.lock()
+        let first = !done
+        done = true
+        lock.unlock()
+        if first { cont.resume(returning: value) }
     }
 }
