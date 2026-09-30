@@ -52,6 +52,23 @@ enum Tool: String, CaseIterable, Identifiable {
         }
     }
     var placesOnTap: Bool { self == .text || self == .counter }
+
+    /// Phím 1 chữ để chọn nhanh (không cần ⌘), theo quen tay từ Shottr/CleanShot.
+    var key: String? {
+        switch self {
+        case .select:    return "V"
+        case .rect:      return "R"
+        case .ellipse:   return "O"
+        case .line:      return "L"
+        case .arrow:     return "A"
+        case .highlight: return "H"
+        case .blur:      return "B"
+        case .pen:       return "P"
+        case .text:      return "T"
+        case .counter:   return "N"
+        case .image, .censor: return nil
+        }
+    }
 }
 
 struct Annotation: Identifiable {
@@ -166,7 +183,7 @@ struct EditorView: View {
             topBar
         }
         .frame(minWidth: 720, minHeight: 480)
-        .background(Color(white: 0.11))
+        .background(Theme.surface)
         .ignoresSafeArea()
         .onAppear { installKeyMonitor() }
         // Vẽ thêm/xoá bớt là nhả cò ⎋ ra — không thì lỡ tay một phím sau đó là bay.
@@ -211,6 +228,16 @@ struct EditorView: View {
                     return nil
                 }
                 onClose?()
+                return nil
+            }
+            // Phím 1 chữ chọn công cụ (R, A, T…). Không đụng khi đang gõ chữ ở bất
+            // kỳ ô nào — annotation Text hay ô nhập trong popover.
+            if event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+               editingID == nil, !exporting,
+               !(event.window?.firstResponder is NSText),
+               let ch = event.charactersIgnoringModifiers?.uppercased(),
+               let t = Tool.allCases.first(where: { $0.key == ch }) {
+                tool = t
                 return nil
             }
             guard event.modifierFlags.contains(.command) else { return event }
@@ -449,14 +476,14 @@ struct EditorView: View {
                 // Nhỏ hơn viewport → căn giữa; lớn hơn → ScrollView tự cho cuộn.
                 .frame(minWidth: geo.size.width, minHeight: geo.size.height, alignment: .center)
             }
-            .background(Color(white: 0.11))
+            .background(Theme.surface)
             // Pinch ở BẤT KỲ đâu trong khung (kể cả vùng xám quanh ảnh) đều zoom.
             // Đặt trên ScrollView (có background phủ kín) nên hit-test cả viewport,
             // không chỉ riêng vùng ảnh.
             .simultaneousGesture(magnifyGesture)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(white: 0.11))
+        .background(Theme.surface)
     }
 
     // Lớp annotation. Tách ra hàm riêng vì được gọi từ 2 nhánh (tĩnh / TimelineView).
@@ -492,19 +519,19 @@ struct EditorView: View {
             Spacer(minLength: 8)
             Button("Save as…") { saveAs() }
                 .controlSize(.large)
-                .buttonBorderShape(.roundedRectangle(radius: 4))
+                .buttonBorderShape(.roundedRectangle(radius: Theme.Radius.control))
                 .disabled(exporting)
             Button("Done") { done() }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .buttonBorderShape(.roundedRectangle(radius: 4))
+                .buttonBorderShape(.roundedRectangle(radius: Theme.Radius.control))
                 .keyboardShortcut(.defaultAction)
                 .disabled(exporting)
         }
         .padding(.horizontal, 14)
         .frame(height: barHeight)
         .frame(maxWidth: .infinity)
-        .background(Color(white: 0.13))
+        .background(Theme.surfaceRaised)
         .overlay(alignment: .bottom) {   // hairline ngăn với canvas
             Rectangle().fill(.white.opacity(0.08)).frame(height: 1)
         }
@@ -516,8 +543,8 @@ struct EditorView: View {
     private func pill<C: View>(@ViewBuilder _ content: () -> C) -> some View {
         HStack(spacing: 3) { content() }
             .padding(5)
-            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 11))
-            .overlay(RoundedRectangle(cornerRadius: 11).stroke(.white.opacity(0.08), lineWidth: 1))
+            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: Theme.Radius.bar))
+            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.bar).stroke(.white.opacity(0.08), lineWidth: 1))
     }
 
     // Các tool gom thành 1 pill, chia khối bằng vạch ngăn cho dễ nhìn.
@@ -562,11 +589,12 @@ struct EditorView: View {
                 .frame(width: 30, height: 28)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.hud(radius: 7, selected: tool == t))
         .foregroundStyle(tool == t ? .white : Color(white: 0.80))
-        .background(RoundedRectangle(cornerRadius: 7)
+        .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
                         .fill(tool == t ? Color.accentColor : .clear))
-        .help(t.label)
+        .animation(Theme.quick, value: tool)
+        .help(t.key.map { "\(t.label) (\($0))" } ?? t.label)
     }
 
     // ── Color: swatch tròn → popover lưới màu ──────────────────────────────
@@ -578,7 +606,7 @@ struct EditorView: View {
                 .padding(8)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.hud)
         .help("Color")
         .popover(isPresented: $showColorPopover, arrowEdge: .bottom) {
             let cols = Array(repeating: GridItem(.fixed(26), spacing: 10), count: 5)
@@ -591,7 +619,7 @@ struct EditorView: View {
                                 .white.opacity(c.color == color ? 0.95 : 0.25),
                                 lineWidth: c.color == color ? 2.5 : 1))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.hud)
                     .help(c.name)
                 }
             }
@@ -608,7 +636,7 @@ struct EditorView: View {
                 .frame(width: 30, height: 30)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.hud)
         .help("Stroke width · blur strength")
         .popover(isPresented: $showWidthPopover, arrowEdge: .bottom) {
             VStack(spacing: 2) {
@@ -628,7 +656,7 @@ struct EditorView: View {
                         .frame(width: 200)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.hud)
                 }
             }
             .padding(8)
@@ -645,7 +673,7 @@ struct EditorView: View {
                 .frame(width: 30, height: 30)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.hud)
         .help("Stickers")
         .popover(isPresented: $showStickerPopover, arrowEdge: .bottom) {
             StickerPicker { seq, name in
@@ -711,7 +739,7 @@ struct EditorView: View {
                     }
                 }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.hud)
         .disabled(scanning)
         .help(redactHint > 0
               ? "Redact — \(redactHint) sensitive item\(redactHint == 1 ? "" : "s") found"
@@ -779,7 +807,7 @@ struct EditorView: View {
                 .frame(width: 32, height: 30)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.hud)
         .disabled(annotations.isEmpty)
         .help("Undo")
     }
@@ -793,7 +821,7 @@ struct EditorView: View {
                 .frame(width: 32, height: 30)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.hud)
         .disabled(annotations.isEmpty)
         .help("Clear all annotations")
     }
@@ -815,7 +843,7 @@ struct EditorView: View {
         .disabled(exporting)
         .padding(.horizontal, 16)
         .frame(height: 44)
-        .background(Color(white: 0.13))
+        .background(Theme.surfaceRaised)
         .overlay(alignment: .top) {   // hairline ngăn với canvas
             Rectangle().fill(.white.opacity(0.08)).frame(height: 1)
         }
@@ -833,7 +861,7 @@ struct EditorView: View {
                     .frame(width: 42)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.hud)
             .help("Fit to window (⌘0)")
             zoomButton("plus") { zoomIn() }
         }
@@ -849,7 +877,7 @@ struct EditorView: View {
                 .frame(width: 24, height: 24)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.hud)
     }
 
     private func zoomIn()  { zoom = min(zoom * 1.25, 16) }
@@ -876,8 +904,8 @@ struct EditorView: View {
                 .frame(width: 34, height: 30)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
+        .buttonStyle(.hud)
+        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: Theme.Radius.control))
         .help(tip)
     }
 
