@@ -25,18 +25,29 @@ final class OCRWindowController {
         win.minSize = NSSize(width: 760, height: 440)
         win.center()
 
-        NotificationCenter.default.addObserver(
-            forName: NSWindow.willCloseNotification, object: win, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.window = nil }
+        // Chỉ xoá tham chiếu nếu cái đang đóng CHÍNH LÀ cửa sổ hiện tại. Không so
+        // thì thông báo đóng của cửa sổ cũ (tới trễ) xoá nhầm cửa sổ mới → không
+        // còn ai giữ nó, OCR lần sau mở ra rồi biến mất.
+        closeObserver.map(NotificationCenter.default.removeObserver)
+        closeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification, object: win, queue: .main) { [weak self, weak win] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.window === win else { return }
+                self.window = nil
+            }
         }
-        NSApp.activate(ignoringOtherApps: true)
-        win.makeKeyAndOrderFront(nil)
         self.window = win
+        // Mở ngay sau phím tắt → macOS thường từ chối activate, cửa sổ sẽ nằm
+        // sau app đang dùng. presentInFront lo chuyện đó.
+        win.presentInFront()
     }
 
+    private var closeObserver: NSObjectProtocol?
+
     func dismiss() {
-        window?.close()
+        let old = window
         window = nil
+        old?.close()
     }
 }
 

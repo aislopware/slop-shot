@@ -58,9 +58,8 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
 
         // App đang là menu-bar (.accessory). Tạm chuyển .regular để có cửa sổ + focus.
         NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
         win.center()
-        win.makeKeyAndOrderFront(nil)
+        win.presentInFront()
     }
 
     /// Đóng editor đang mở mà KHÔNG xuất file (bắt đầu chụp mới thì tự "Done"

@@ -41,9 +41,8 @@ final class EditorWindowController: NSObject, NSWindowDelegate {
         win.standardWindowButton(.zoomButton)?.isHidden = true
 
         NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
         win.center()
-        win.makeKeyAndOrderFront(nil)
+        win.presentInFront()
     }
 
     // Đóng editor đang mở mà KHÔNG lưu (giống CleanShot: bắt đầu chụp mới thì
