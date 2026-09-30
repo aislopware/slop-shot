@@ -4,6 +4,19 @@ Sinh từ commit log bằng [git-cliff](https://git-cliff.org). Mục nào nằm
 loại (type) của commit quyết định — tức quyết định lúc VIẾT commit, không phải lúc cắt
 release. Quy ước được `scripts/check-commit-msg.sh` chặn ngay ở hook commit-msg.
 
+## [0.5.0](https://github.com/aislopware/slop-shot/compare/v0.4.1...v0.5.0) — 2026-09-30
+
+### Features
+
+- Show the active tool; hold Space, Shift, or press F ([`6f78afc`](https://github.com/aislopware/slop-shot/commit/6f78afc92e82fbacd4da80e0de89ae9b9e0e0371))
+- Reopen SlopShot after brew upgrade replaces it ([`a992ddc`](https://github.com/aislopware/slop-shot/commit/a992ddc2036d39d58ecf3562888c5d43cc652b52))
+- Record audio, shutter sound, faster and safer captures ([`d97f464`](https://github.com/aislopware/slop-shot/commit/d97f464227d671f87d90cfd553cd98e43b742340))
+
+### Bug fixes
+
+- Stop a crash when text recognition reports back twice ([`bc450ae`](https://github.com/aislopware/slop-shot/commit/bc450ae03783e5ace030a190268708e32a5c8470))
+- Read colors correctly on P3 displays ([`eeee611`](https://github.com/aislopware/slop-shot/commit/eeee611b630c4a24e63e15626edcbaea24cba7cc))
+
 ## [0.4.1](https://github.com/aislopware/slop-shot/compare/v0.4.0...v0.4.1) — 2026-09-30
 
 ### Bug fixes
