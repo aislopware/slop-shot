@@ -205,6 +205,35 @@ struct OverlayHint: View {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// Nhãn tên công cụ ở đầu màn hình ("Record Area", "Pick Color"…): bấm phím tắt
+// xong nhìn là biết mình đang ở chế độ nào. Khác bảng gợi ý, nhãn này ở lại
+// suốt phiên; con trỏ lại gần thì mờ đi để không che chỗ đang chọn.
+// ─────────────────────────────────────────────────────────────────────────
+struct ToolBadge: View {
+    let title: String
+    let icon: String
+    let cursor: CGPoint
+
+    var body: some View {
+        GeometryReader { geo in
+            let center = CGPoint(x: geo.size.width / 2, y: 58)
+            let near = abs(cursor.x - center.x) < 140 && abs(cursor.y - center.y) < 50
+            Label(title, systemImage: icon)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+                .background(OverlayChrome.chipFill, in: Capsule())
+                .overlay(Capsule().stroke(OverlayChrome.chipEdge, lineWidth: 1))
+                .shadow(color: .black.opacity(0.4), radius: 6)
+                .opacity(near ? 0.15 : 1)
+                .animation(.easeOut(duration: 0.12), value: near)
+                .position(center)
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // NSHostingView chỉ để VẼ: mọi cú chuột xuyên thẳng qua nó xuống view bắt sự
 // kiện nằm dưới. Overlay cần bắt chuột/phím thô (mouseMoved khi app không
 // active, cursor rect, warp con trỏ) nên phần đó vẫn là NSView.

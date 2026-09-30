@@ -55,6 +55,8 @@ final class SelectionModel: ObservableObject {
     var frozen: CGImage?                     // nil = overlay trong suốt, không có kính lúp
     var scaleFactor: CGFloat = 2             // để hiện kích thước theo pixel
     var hintText = "Drag to capture"
+    var toolTitle = "Capture Area"
+    var toolIcon = "camera.viewfinder"
     var snapEnabled = true
     var confirmTitle = "Capture"
     var confirmIcon = "camera.fill"
@@ -107,6 +109,7 @@ struct SelectionOverlay: View {
                         .frame(width: geo.size.width, height: geo.size.height, alignment: .bottom)
                 }
 
+                ToolBadge(title: model.toolTitle, icon: model.toolIcon, cursor: model.cursor)
                 badge(in: bounds)
                 if model.adjusting, !model.dragging {
                     actionBar(in: bounds)
@@ -151,8 +154,8 @@ struct SelectionOverlay: View {
 
     private var hintSubtitle: String {
         model.snapEnabled
-            ? "click a highlighted area  ·  ⌥ free select  ·  drag the box to adjust, ↩ to confirm  ·  esc to cancel"
-            : "⌥ free select  ·  drag the box to adjust, ↩ to confirm  ·  esc to cancel"
+            ? "click a highlighted area  ·  ⌥ free select  ·  ⇧ square  ·  hold space to move  ·  F full screen  ·  esc to cancel"
+            : "⇧ square  ·  hold space to move  ·  F full screen  ·  esc to cancel"
     }
 
     // ── Vẽ nền: phủ tối, khoét lỗ, viền, tay nắm, đường gióng, chữ thập ──
@@ -352,6 +355,9 @@ final class SelectionEventView: NSView {
 
     private var startPoint: NSPoint?
     private var freeMode = false            // giữ ⌥ = tắt bắt dính
+    private var squareMode = false          // giữ ⇧ lúc kéo = khung vuông
+    private var spaceMove = false           // giữ Space lúc kéo = dời cả khung đang kéo
+    private var lastDragPoint: CGPoint?
 
     /// Đang làm gì với khung ở bước chỉnh: kéo cả khung, hay kéo cạnh/góc nào.
     private enum Grab { case move, resize(Edges), button(SelectionModel.ActionButton) }
@@ -572,8 +578,10 @@ final class SelectionEventView: NSView {
 
     override func flagsChanged(with event: NSEvent) {
         let free = event.modifierFlags.contains(.option)
-        guard free != freeMode else { return }
+        let square = event.modifierFlags.contains(.shift)
+        guard free != freeMode || square != squareMode else { return }
         freeMode = free
+        squareMode = square
         if model.dragging, let start = startPoint {
             model.currentRect = rect(from: start, to: model.cursor)
         }
@@ -611,6 +619,7 @@ final class SelectionEventView: NSView {
         }
         grab = nil
         startPoint = p
+        lastDragPoint = p
         model.cursor = startPoint ?? .zero
         model.currentRect = .zero
         model.dragging = false
@@ -638,7 +647,16 @@ final class SelectionEventView: NSView {
         case nil:
             break
         }
-        guard let start = startPoint else { return }
+        guard var start = startPoint else { return }
+        squareMode = event.modifierFlags.contains(.shift)
+        // Giữ Space: cả khung đang kéo trượt theo chuột (điểm neo đi cùng), buông
+        // ra thì kéo tiếp cỡ như cũ — giống macOS ⌘⇧4.
+        if spaceMove, model.dragging, let last = lastDragPoint {
+            start.x += p.x - last.x
+            start.y += p.y - last.y
+            startPoint = start
+        }
+        lastDragPoint = p
         model.cursor = p
         // Bấm chuột bao giờ cũng xê vài pixel (trackpad càng rõ). Chỉ tính là KÉO
         // khi vượt ngưỡng — chưa vượt thì giữ nguyên `hover`, để thả ra vẫn chụp
@@ -653,11 +671,23 @@ final class SelectionEventView: NSView {
     }
 
     // Chuẩn hoá để kéo theo hướng nào cũng ra rect dương, rồi cho bắt dính.
+    // Giữ ⇧ = khung vuông (cạnh dài hơn quyết định), không bắt dính vì hút
+    // cạnh sẽ làm méo tỉ lệ.
     private func rect(from start: NSPoint, to p: CGPoint) -> CGRect {
-        let raw = CGRect(x: min(start.x, p.x), y: min(start.y, p.y),
-                         width: abs(p.x - start.x), height: abs(p.y - start.y))
+        var end = p
+        if squareMode {
+            let side = max(abs(p.x - start.x), abs(p.y - start.y))
+            end = CGPoint(x: start.x + (p.x >= start.x ? side : -side),
+                          y: start.y + (p.y >= start.y ? side : -side))
+        }
+        let raw = CGRect(x: min(start.x, end.x), y: min(start.y, end.y),
+                         width: abs(end.x - start.x), height: abs(end.y - start.y))
         guard raw.width >= 3, raw.height >= 3 else { return raw }
-        return snapped(raw)
+        if squareMode {
+            model.guideXs = []; model.guideYs = []
+            return raw
+        }
+        return snapped(raw).intersection(bounds)
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -680,6 +710,8 @@ final class SelectionEventView: NSView {
             return
         }
         startPoint = nil
+        lastDragPoint = nil
+        spaceMove = false
         if model.dragging, model.currentRect.width >= 5, model.currentRect.height >= 5 {
             enterAdjust(model.currentRect)
         } else if let hover = model.hover {
@@ -695,12 +727,22 @@ final class SelectionEventView: NSView {
 
     override func rightMouseDown(with event: NSEvent) { onCancel?() }
 
+    override func keyUp(with event: NSEvent) {
+        if event.keyCode == 49 { spaceMove = false }
+    }
+
     override func keyDown(with event: NSEvent) {
         switch event.keyCode {
         case 53:                                  // ⎋ = thoát hẳn, không lùi từng bước
             onCancel?()
         case 36, 76:                              // ↩ / enter = chụp khung đang chỉnh
             if model.adjusting { confirm() }
+        case 49:                                  // Space (giữ) = dời khung đang kéo
+            if startPoint != nil { spaceMove = true }
+        case 3 where grab == nil && !model.dragging:  // F = cả màn hình
+            startPoint = nil
+            model.interacted = true
+            enterAdjust(bounds)
         case 123, 124, 125, 126 where model.adjusting:
             // Mũi tên dời khung 1pt, giữ ⇧ thì 10pt.
             let step: CGFloat = event.modifierFlags.contains(.shift) ? 10 : 1
@@ -727,12 +769,17 @@ final class RegionSelectionController {
     private var window: OverlayPanel?
 
     private var escMonitor: Any?
+    private var cancelCurrent: (() -> Void)?
 
     /// `confirmTitle` / `confirmIcon`: chữ trên nút xác nhận ở bước chỉnh khung
     /// ("Capture", "Start Recording"…).
     func begin(on screen: NSScreen, frozen: CGImage? = nil,
+               tool: String = "Capture Area", toolIcon: String = "camera.viewfinder",
                confirmTitle: String = "Capture", confirmIcon: String = "camera.fill",
                completion: @escaping (CGRect?) -> Void) {
+        // Phiên cũ còn mở (phím tắt bấm dồn) → huỷ nó trước, không để lại một
+        // lớp phủ mồ côi che màn hình mà không ai đóng.
+        cancelCurrent?()
         let size = screen.frame.size
         let model = SelectionModel()
         // Tỉ lệ point→pixel lấy từ chính ảnh đóng băng (khớp với ảnh sẽ cắt ra),
@@ -742,6 +789,8 @@ final class RegionSelectionController {
         model.frozen = frozen
         model.snapEnabled = AppSettings.shared.snapToEdges
         model.confirmTitle = confirmTitle
+        model.toolTitle = tool
+        model.toolIcon = toolIcon
         model.confirmIcon = confirmIcon
         model.hintText = model.snapEnabled
             ? "Drag to capture · click a highlighted area · ⌥ free · esc"
@@ -799,6 +848,7 @@ final class RegionSelectionController {
 
         view.onSelected = { rect in finishOnce(rect) }
         view.onCancel = { finishOnce(nil) }
+        cancelCurrent = { finishOnce(nil) }
 
         // Lưới an toàn cho ⎋: có lúc view mất first responder (bấm trúng lớp
         // khác, panel khác thành key…) và keyDown không tới nữa — ⎋ vẫn phải
@@ -843,6 +893,7 @@ final class RegionSelectionController {
     private func cleanup() {
         if let escMonitor { NSEvent.removeMonitor(escMonitor) }
         escMonitor = nil
+        cancelCurrent = nil
         window?.orderOut(nil)
         window = nil
     }

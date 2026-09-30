@@ -46,6 +46,8 @@ struct ColorPickerOverlay: View {
                     .padding(.bottom, 96)
                     .frame(width: geo.size.width, height: geo.size.height, alignment: .bottom)
 
+                ToolBadge(title: "Pick Color", icon: "eyedropper", cursor: model.cursor)
+
                 if let cg = model.frozen {
                     LoupeView(image: cg, cursor: model.cursor, scale: model.scaleFactor,
                               side: side, zoom: 12)
