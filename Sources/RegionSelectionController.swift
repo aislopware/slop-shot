@@ -56,6 +56,10 @@ final class SelectionModel: ObservableObject {
     var scaleFactor: CGFloat = 2             // để hiện kích thước theo pixel
     var hintText = "Drag to capture"
     var toolTitle = "Capture Area"
+    /// Thả chuột là chốt luôn, không qua bước chỉnh khung (editor inline lo tiếp).
+    var skipAdjust = false
+    /// Đang vẽ ngay trên vùng chọn: ẩn chip kích thước (thanh công cụ nằm đó).
+    @Published var inlineEditing = false
     var toolIcon = "camera.viewfinder"
     var snapEnabled = true
     var confirmTitle = "Capture"
@@ -298,7 +302,9 @@ struct SelectionOverlay: View {
     /// dưới, chật nữa thì chui vào trong khung.
     @ViewBuilder
     private func badge(in bounds: CGRect) -> some View {
-        if !model.currentRect.isEmpty {
+        if model.inlineEditing {
+            EmptyView()
+        } else if !model.currentRect.isEmpty {
             chip(sizeText(of: model.currentRect), for: model.currentRect, accent: false, in: bounds)
         } else if let hover = model.hover {
             let kind = hover.isWindow ? "Window" : "Item"
@@ -406,6 +412,14 @@ final class SelectionEventView: NSView {
     // ── Bước chỉnh khung ─────────────────────────────────────────────────
 
     private func enterAdjust(_ rect: CGRect) {
+        if model.skipAdjust {
+            model.currentRect = rect
+            model.hover = nil
+            model.dragging = false
+            model.guideXs = []; model.guideYs = []
+            onSelected?(rect)
+            return
+        }
         model.currentRect = rect
         model.hover = nil
         model.dragging = false
@@ -781,12 +795,50 @@ final class RegionSelectionController {
 
     private var escMonitor: Any?
     private var cancelCurrent: (() -> Void)?
+    private var model: SelectionModel?
+    private weak var eventView: SelectionEventView?
+
+    /// Đóng lớp phủ đang mở (nếu có), coi như huỷ.
+    func cancel() { cancelCurrent?() }
+
+    /// Chọn xong (kiểu inline): gỡ phần bắt chuột/phím của bước chọn, lớp phủ
+    /// vẫn nằm đó chờ editor.
+    private func detachSelection() {
+        if let escMonitor { NSEvent.removeMonitor(escMonitor) }
+        escMonitor = nil
+        eventView?.removeFromSuperview()
+        cancelCurrent = { [weak self] in self?.cleanup(fade: true) }
+    }
+
+    /// Đắp editor lên vùng vừa chọn (sau `begin(editInline: true)`). completion
+    /// nhận ảnh đã vẽ + việc cần làm, hoặc nil nếu huỷ; lớp phủ tự đóng.
+    func showInlineEditor(image: NSImage, rect: CGRect,
+                          completion: @escaping ((NSImage, InlineEditHost.Action)?) -> Void) {
+        guard let win = window, let backdrop = win.contentView else { completion(nil); return }
+        var done = false
+        let finish: ((NSImage, InlineEditHost.Action)?) -> Void = { [weak self] result in
+            guard !done else { return }
+            done = true
+            self?.cleanup(fade: result == nil)
+            completion(result)
+        }
+        model?.inlineEditing = true
+        let host = InlineEditHost(rect: rect) { img, action in finish((img, action)) }
+        let editor = EditorView(image: image, sourceURL: nil, onClose: { finish(nil) }, inline: host)
+        let hv = NSHostingView(rootView: editor)
+        hv.frame = backdrop.bounds
+        hv.autoresizingMask = [.width, .height]
+        backdrop.addSubview(hv)
+        win.makeFirstResponder(hv)
+        cancelCurrent = { finish(nil) }
+    }
 
     /// `confirmTitle` / `confirmIcon`: chữ trên nút xác nhận ở bước chỉnh khung
     /// ("Capture", "Start Recording"…).
     func begin(on screen: NSScreen, frozen: CGImage? = nil,
                tool: String = "Capture Area", toolIcon: String = "camera.viewfinder",
                confirmTitle: String = "Capture", confirmIcon: String = "camera.fill",
+               editInline: Bool = false,
                completion: @escaping (CGRect?) -> Void) {
         // Phiên cũ còn mở (phím tắt bấm dồn) → huỷ nó trước, không để lại một
         // lớp phủ mồ côi che màn hình mà không ai đóng.
@@ -807,7 +859,10 @@ final class RegionSelectionController {
             ? "Drag to capture · click a highlighted area · ⌥ free · esc"
             : "Drag to capture · esc to cancel"
 
+        model.skipAdjust = editInline
         let view = SelectionEventView(frame: NSRect(origin: .zero, size: size), model: model)
+        self.model = model
+        self.eventView = view
         view.autoresizingMask = [.width, .height]
         // Lấy danh sách cửa sổ TRƯỚC khi overlay hiện lên (khỏi dính chính mình).
         if model.snapEnabled {
@@ -825,7 +880,9 @@ final class RegionSelectionController {
         let finishOnce: (CGRect?) -> Void = { [weak self] rect in
             guard !finished else { return }
             finished = true
-            self?.cleanup(fade: rect == nil)
+            // editInline: chọn xong thì GIỮ lớp phủ — showInlineEditor sẽ đắp
+            // editor lên đúng cửa sổ này, không đóng-mở lại nên không nháy.
+            if editInline, rect != nil { self?.detachSelection() } else { self?.cleanup(fade: rect == nil) }
             completion(rect)
         }
 
@@ -909,5 +966,6 @@ final class RegionSelectionController {
         cancelCurrent = nil
         if let win = window { OverlayChrome.close(win, fade: fade) }
         window = nil
+        model = nil
     }
 }

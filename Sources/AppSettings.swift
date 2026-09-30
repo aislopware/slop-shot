@@ -151,6 +151,9 @@ final class AppSettings: ObservableObject {
     // Tiếng màn trập khi chụp xong — không có thì bấm phím tắt xong chẳng biết
     // đã chụp hay chưa, nhất là khi tắt preview.
     @Published var playCaptureSound: Bool  { didSet { d.set(playCaptureSound, forKey: K.sound) } }
+    // Chụp vùng: kéo xong là thanh vẽ hiện ngay trên vùng đó (kiểu macshot),
+    // ⌘C là chép luôn. Tắt thì quay về kiểu cũ: chỉnh khung → Capture → preview.
+    @Published var editAfterSelect: Bool  { didSet { d.set(editAfterSelect, forKey: K.inlineEdit) } }
     // Âm thanh khi quay: tiếng của máy (app đang phát) và mic. Mặc định tắt —
     // bật mic là macOS hỏi quyền, không nên bắt người chỉ quay màn hình trả lời.
     @Published var recordSystemAudio: Bool { didSet { d.set(recordSystemAudio, forKey: K.sysAudio) } }
@@ -213,7 +216,7 @@ final class AppSettings: ObservableObject {
         static let snap = "select.snap", color = "pick.color.format"
         static let redact = "editor.redact.scan", index = "history.index.text"
         static let side = "preview.side", menuIcon = "menubar.icon"
-        static let sound = "capture.sound"
+        static let sound = "capture.sound", inlineEdit = "capture.inlineEdit"
         static let sysAudio = "record.audio.system", mic = "record.audio.mic"
     }
 
@@ -232,6 +235,7 @@ final class AppSettings: ObservableObject {
         previewSide     = PreviewSide(rawValue: d.string(forKey: K.side) ?? "left") ?? .left
         showMenuBarIcon = (d.object(forKey: K.menuIcon) as? Bool) ?? true
         playCaptureSound = (d.object(forKey: K.sound) as? Bool) ?? true
+        editAfterSelect = (d.object(forKey: K.inlineEdit) as? Bool) ?? true
         recordSystemAudio = d.bool(forKey: K.sysAudio)
         recordMicrophone = d.bool(forKey: K.mic)
         if let raw = d.data(forKey: K.hotkeys),

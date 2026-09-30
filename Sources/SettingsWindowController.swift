@@ -128,6 +128,8 @@ private struct CaptureTab: View {
             }
 
             Section("After capture") {
+                Toggle("Annotate right after selecting an area", isOn: $settings.editAfterSelect)
+                    .help("Drawing tools appear on the selection; ⌘C copies, ⌘S saves, esc cancels.")
                 Toggle("Also copy to clipboard", isOn: $settings.copyToClipboard)
                 Toggle("Play a sound", isOn: $settings.playCaptureSound)
                 Toggle("Show preview thumbnail", isOn: $settings.showThumbnail)

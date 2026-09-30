@@ -182,14 +182,21 @@ final class ScreenCapturer: ObservableObject {
         let frozen = try? await captureDisplay(on: screen)
 
         // Bọc callback chọn vùng thành async/await cho gọn (continuation = "Promise" của Swift).
+        // Vẽ ngay trên vùng chọn (kiểu macshot) cần ảnh đóng băng để làm nền.
+        let editInline = settings.editAfterSelect && frozen != nil
         let rectInScreen: CGRect? = await withCheckedContinuation { cont in
-            selection.begin(on: screen, frozen: frozen) { rect in
+            selection.begin(on: screen, frozen: frozen, editInline: editInline) { rect in
                 cont.resume(returning: rect)
             }
         }
 
         guard let rect = rectInScreen else {
             lastStatus = "Selection cancelled."
+            return
+        }
+
+        if editInline, let frozen {
+            await editInPlace(frozen, rect: rect, on: screen)
             return
         }
 
@@ -581,7 +588,46 @@ final class ScreenCapturer: ObservableObject {
     // Thứ tự quan trọng cho cảm giác "nhanh": tiếng chụp + preview hiện NGAY,
     // còn mã hoá PNG (100-300ms với màn 5K) và ghi đĩa chạy ở luồng nền. Xong
     // file mới chép clipboard (clipboard có kèm URL file) và ghi lịch sử.
-    private func finishImage(_ cgImage: CGImage, subtitle: String, on screen: NSScreen) {
+    /// Kéo chọn xong → thanh vẽ hiện ngay trên vùng đó. ⌘C chép (luôn chép,
+    /// bất kể cài đặt clipboard — đó là ý của phím), ⌘S lưu thẳng vào folder.
+    private func editInPlace(_ frozen: CGImage, rect: CGRect, on screen: NSScreen) async {
+        let cropped: CGImage
+        do {
+            cropped = try crop(frozen, to: rect, on: screen)
+        } catch {
+            selection.cancel()
+            report(error)
+            return
+        }
+        let base = NSImage(cgImage: cropped, size: NSSize(width: cropped.width, height: cropped.height))
+        let result = await withCheckedContinuation { cont in
+            selection.showInlineEditor(image: base, rect: rect) { cont.resume(returning: $0) }
+        }
+        guard let (edited, action) = result, let rendered = ImageOps.cg(edited) else {
+            lastStatus = "Selection cancelled."
+            return
+        }
+        // SwiftUI xuất ảnh 16-bit float (dải màu mở rộng): file PNG nặng gấp đôi,
+        // vài app dán vào còn hiện sai màu. Vẽ lại về 8-bit, giữ hệ màu của ảnh
+        // chụp gốc (Display P3 trên màn Mac) để không mất màu.
+        let cg = Self.eightBit(rendered, space: cropped.colorSpace)
+        let subtitle = "\(cg.width)×\(cg.height)px"
+        finishImage(cg, subtitle: subtitle, on: screen, forceCopy: action == .copy)
+        if action == .save { quickSaveImage(cg, baseName: "SlopShot \(timestampNow())") }
+    }
+
+    private static func eightBit(_ cg: CGImage, space: CGColorSpace?) -> CGImage {
+        guard cg.bitsPerComponent > 8 else { return cg }
+        let cs = space.flatMap { $0.model == .rgb ? $0 : nil } ?? CGColorSpace(name: CGColorSpace.sRGB)!
+        guard let ctx = CGContext(data: nil, width: cg.width, height: cg.height, bitsPerComponent: 8,
+                                  bytesPerRow: 0, space: cs,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return cg }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
+        return ctx.makeImage() ?? cg
+    }
+
+    private func finishImage(_ cgImage: CGImage, subtitle: String, on screen: NSScreen,
+                             forceCopy: Bool = false) {
         let nsImage = NSImage(cgImage: cgImage,
                               size: NSSize(width: cgImage.width, height: cgImage.height))
         let baseName = "SlopShot \(timestampNow())"
@@ -592,7 +638,8 @@ final class ScreenCapturer: ObservableObject {
         playCaptureSound()
         lastImage = nsImage
         lastSavedURL = url
-        lastStatus = settings.copyToClipboard
+        let copy = settings.copyToClipboard || forceCopy
+        lastStatus = copy
             ? "✅ \(subtitle) · copied to clipboard."
             : "✅ Captured \(subtitle)."
 
@@ -621,7 +668,7 @@ final class ScreenCapturer: ObservableObject {
             let fileURL = written ? url : nil
 
             // Clipboard (tùy cài đặt): chép cả ảnh lẫn file.
-            if settings.copyToClipboard {
+            if copy {
                 let pb = NSPasteboard.general
                 pb.clearContents()
                 pb.writeObjects(fileURL.map { [nsImage, $0 as NSURL] } ?? [nsImage])

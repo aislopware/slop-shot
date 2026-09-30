@@ -95,6 +95,23 @@ struct NamedColor: Identifiable {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// Editor mở NGAY TRÊN vùng vừa chọn (kiểu macshot): không cửa sổ riêng, thanh
+// công cụ nằm sát vùng chọn, ⌘C/↩ chép, ⌘S lưu, ⎋ huỷ. Cùng một EditorView —
+// chỉ khác cách bày biện — nên mọi công cụ, undo, redact… đều có sẵn.
+// ─────────────────────────────────────────────────────────────────────────
+struct InlineEditHost {
+    enum Action { case copy, save }
+    /// Vùng chọn: points, gốc trên-trái màn hình (cũng là toạ độ của overlay).
+    let rect: CGRect
+    let onFinish: (NSImage, Action) -> Void
+
+    /// Nét vẽ, cỡ chữ, số đếm đều tính theo bề ngang khung vẽ. Vùng chọn hẹp
+    /// thì nét mảnh như sợi chỉ, chữ không đọc nổi → quy về như khung ~900pt
+    /// (cỡ khung vẽ quen thuộc của cửa sổ editor).
+    var unit: CGFloat { max(1, 900 / max(rect.width, 1)) }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // Editor: image + Canvas annotation layer — CleanShot-style layout.
 // ─────────────────────────────────────────────────────────────────────────
 struct EditorView: View {
@@ -102,6 +119,10 @@ struct EditorView: View {
     var onClose: (() -> Void)? = nil
     /// Có nét vẽ chưa lưu hay không — để chụp mới thì hỏi trước khi đóng editor.
     var onDirtyChange: ((Bool) -> Void)? = nil
+    /// Khác nil = editor nằm ngay trên vùng chọn, không phải cửa sổ riêng.
+    var inline: InlineEditHost? = nil
+    private var unit: CGFloat { inline?.unit ?? 1 }
+    @State private var inlineBarSize: CGSize = .zero
 
     // Ảnh nền để @State được vì flip/rotate sẽ thay nó bằng ảnh đã biến đổi.
     @State private var image: NSImage
@@ -140,11 +161,12 @@ struct EditorView: View {
     @FocusState private var textFocused: Bool
 
     init(image: NSImage, sourceURL: URL?, onClose: (() -> Void)? = nil,
-         onDirtyChange: ((Bool) -> Void)? = nil) {
+         onDirtyChange: ((Bool) -> Void)? = nil, inline: InlineEditHost? = nil) {
         _image = State(initialValue: image)
         self.sourceURL = sourceURL
         self.onClose = onClose
         self.onDirtyChange = onDirtyChange
+        self.inline = inline
     }
 
     private let barHeight: CGFloat = 52
@@ -174,6 +196,20 @@ struct EditorView: View {
 
     // ── Layout: toolbar OVERLAYS the top so it's never clipped ─────────────
     var body: some View {
+        Group {
+            if let inline { inlineBody(inline) } else { windowBody }
+        }
+        .onAppear { installKeyMonitor() }
+        // Vẽ thêm/xoá bớt là nhả cò ⎋ ra — không thì lỡ tay một phím sau đó là bay.
+        .onChange(of: annotations.count) { _, n in
+            escArmed = false
+            onDirtyChange?(n > 0)
+        }
+        .onDisappear { removeKeyMonitor() }
+        .task { await scanForSensitiveData() }
+    }
+
+    private var windowBody: some View {
         ZStack(alignment: .top) {
             VStack(spacing: 0) {
                 Color.clear.frame(height: barHeight)
@@ -185,14 +221,94 @@ struct EditorView: View {
         .frame(minWidth: 720, minHeight: 480)
         .background(Theme.surface)
         .ignoresSafeArea()
-        .onAppear { installKeyMonitor() }
-        // Vẽ thêm/xoá bớt là nhả cò ⎋ ra — không thì lỡ tay một phím sau đó là bay.
-        .onChange(of: annotations.count) { _, n in
-            escArmed = false
-            onDirtyChange?(n > 0)
+    }
+
+    // ── Bày biện kiểu inline: khung vẽ đè khít vùng chọn + thanh công cụ nổi ──
+    private func inlineBody(_ host: InlineEditHost) -> some View {
+        GeometryReader { geo in
+            let r = host.rect
+            board(r.size, shadow: false)
+                .position(x: r.midX, y: r.midY)
+            inlineToolbar
+                .fixedSize()
+                .onGeometryChange(for: CGSize.self) { $0.size } action: { inlineBarSize = $0 }
+                .position(inlineBarCenter(for: r, in: geo.size))
         }
-        .onDisappear { removeKeyMonitor() }
-        .task { await scanForSensitiveData() }
+        .ignoresSafeArea()
+    }
+
+    /// Thanh công cụ nằm ngay dưới vùng chọn; sát đáy thì lên trên; vùng chọn
+    /// cao gần kín màn thì nằm trong mép dưới của chính vùng chọn.
+    private func inlineBarCenter(for r: CGRect, in screen: CGSize) -> CGPoint {
+        let w = inlineBarSize.width, h = inlineBarSize.height, gap: CGFloat = 10, m: CGFloat = 8
+        var y = r.maxY + gap + h / 2
+        if y + h / 2 > screen.height - m { y = r.minY - gap - h / 2 }
+        if y - h / 2 < m { y = r.maxY - gap - h / 2 }
+        let x = min(max(r.midX, w / 2 + m), screen.width - w / 2 - m)
+        return CGPoint(x: x, y: y)
+    }
+
+    private var inlineToolbar: some View {
+        HStack(spacing: 8) {
+            toolbarTools
+            styleControls
+            pill { redactButton; divider; undoButton; clearButton }
+            pill {
+                Button { onClose?() } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color(white: 0.85))
+                        .frame(width: 30, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.hud(radius: 7))
+                .help("Cancel (esc)")
+                Button { finishInline(.save) } label: {
+                    Image(systemName: "square.and.arrow.down")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color(white: 0.85))
+                        .frame(width: 30, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.hud(radius: 7))
+                .help("Save (⌘S)")
+                Button { finishInline(.copy) } label: {
+                    Label("Copy", systemImage: "doc.on.doc")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .frame(height: 28)
+                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.hud(radius: 7, selected: true))
+                .help("Copy and close (⌘C or ↩)")
+            }
+        }
+        .disabled(exporting)
+        .padding(6)
+        .hudBackground(radius: Theme.Radius.panel, blending: .withinWindow)
+        .overlay(alignment: .top) {
+            // Thông báo (dò dữ liệu nhạy cảm, lỗi…): cửa sổ có thanh dưới, inline thì nổi phía trên.
+            if !status.isEmpty {
+                Text(status)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10).padding(.vertical, 4)
+                    .hudBackground(radius: Theme.Radius.small, blending: .withinWindow)
+                    .fixedSize()
+                    .offset(y: -30)
+            }
+        }
+    }
+
+    private func finishInline(_ action: InlineEditHost.Action) {
+        guard let inline, !exporting else { return }
+        haptic()
+        // Có sticker động: chép GIF (mất vài giây) rồi mới đóng.
+        if hasAnimation, action == .copy { copyAnimated { onClose?() }; return }
+        guard let img = renderImage() else { status = "Export failed"; return }
+        inline.onFinish(img, action)
     }
 
     // ── ⌘Z undo / ⌘⇧Z redo cho annotation ─────────────────────────────────
@@ -201,6 +317,16 @@ struct EditorView: View {
     // (qua Edit menu). Ngược lại tự undo/redo nét vẽ rồi "nuốt" event (return nil).
     private func installKeyMonitor() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // Inline: ⌘C / ↩ chép, ⌘S lưu. Đang gõ chữ thì để ô chữ tự xử lý
+            // (⌘C chép đoạn chữ, ↩ xong dòng); popover đang mở cũng vậy.
+            if inline != nil, editingID == nil, !exporting,
+               !showColorPopover, !showWidthPopover, !showStickerPopover {
+                let cmd = event.modifierFlags.contains(.command)
+                let k = event.charactersIgnoringModifiers?.lowercased()
+                if cmd, k == "c" { finishInline(.copy); return nil }
+                if cmd, k == "s" { finishInline(.save); return nil }
+                if !cmd, event.keyCode == 36 || event.keyCode == 76 { finishInline(.copy); return nil }
+            }
             // ⌫ / ⌦ xoá layer đang chọn. Đứng TRƯỚC guard .command vì hai phím này
             // không đi kèm modifier. Đang gõ trong ô Text thì để nó xoá chữ.
             if event.keyCode == 51 || event.keyCode == 117,
@@ -221,6 +347,8 @@ struct EditorView: View {
                 if showColorPopover || showWidthPopover || showStickerPopover { return event }
                 if editingID != nil { editingID = nil; textFocused = false; escArmed = false; return nil }
                 if selectedID != nil { selectedID = nil; escArmed = false; return nil }
+                // Inline: ⎋ là huỷ luôn như lúc chọn vùng — không hỏi lại.
+                if inline != nil { onClose?(); return nil }
                 if !annotations.isEmpty, !escArmed {
                     escArmed = true
                     status = "Press ⎋ again to discard \(annotations.count) "
@@ -438,43 +566,10 @@ struct EditorView: View {
             let base = fittedSize(in: geo.size)        // kích thước ở mức "vừa khung"
             let size = CGSize(width: base.width * zoom, height: base.height * zoom)
             ScrollView([.horizontal, .vertical]) {
-                // alignment .topLeading: ô nhập chữ & text vẽ ra dùng CÙNG gốc toạ độ
-                // (góc trên-trái) → gõ xong chữ KHÔNG nhảy chỗ nữa.
-                ZStack(alignment: .topLeading) {
-                    Image(nsImage: image)
-                        .resizable().interpolation(.high)
-                        .frame(width: size.width, height: size.height)
-
-                    // Có sticker động thì để TimelineView đập nhịp lại canvas; không
-                    // có thì vẽ tĩnh — khỏi tốn CPU vẽ lại 15 lần/giây vô ích.
-                    if hasAnimation {
-                        TimelineView(.animation(minimumInterval: 1 / 15)) { tl in
-                            canvas(size, time: tl.date.timeIntervalSince(animStart))
-                        }
-                    } else {
-                        canvas(size, time: 0)
-                    }
-
-                    if let id = editingID, let idx = annotations.firstIndex(where: { $0.id == id }) {
-                        TextField("Text…", text: $annotations[idx].text)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 0.022 * size.width, weight: .semibold))
-                            .foregroundStyle(annotations[idx].color)
-                            .frame(width: 240, alignment: .leading)
-                            .focused($textFocused)
-                            .offset(x: annotations[idx].points[0].x * size.width,
-                                    y: annotations[idx].points[0].y * size.height)
-                            .onSubmit { editingID = nil }
-                    }
-                }
-                .frame(width: size.width, height: size.height, alignment: .topLeading)
-                .shadow(color: .black.opacity(0.5), radius: 16, y: 6)
-                .contentShape(Rectangle())
-                .gesture(drawGesture(size))
-                .simultaneousGesture(tapGesture(size))
-                .padding(28)
-                // Nhỏ hơn viewport → căn giữa; lớn hơn → ScrollView tự cho cuộn.
-                .frame(minWidth: geo.size.width, minHeight: geo.size.height, alignment: .center)
+                board(size, shadow: true)
+                    .padding(28)
+                    // Nhỏ hơn viewport → căn giữa; lớn hơn → ScrollView tự cho cuộn.
+                    .frame(minWidth: geo.size.width, minHeight: geo.size.height, alignment: .center)
             }
             .background(Theme.surface)
             // Pinch ở BẤT KỲ đâu trong khung (kể cả vùng xám quanh ảnh) đều zoom.
@@ -486,13 +581,52 @@ struct EditorView: View {
         .background(Theme.surface)
     }
 
+    // Ảnh + lớp nét vẽ + ô gõ chữ, kèm cử chỉ vẽ. Dùng chung cho cửa sổ editor
+    // (trong ScrollView, có zoom) và kiểu inline (đè khít vùng chọn).
+    private func board(_ size: CGSize, shadow: Bool) -> some View {
+        // alignment .topLeading: ô nhập chữ & text vẽ ra dùng CÙNG gốc toạ độ
+        // (góc trên-trái) → gõ xong chữ KHÔNG nhảy chỗ nữa.
+        ZStack(alignment: .topLeading) {
+            Image(nsImage: image)
+                .resizable().interpolation(.high)
+                .frame(width: size.width, height: size.height)
+
+            // Có sticker động thì để TimelineView đập nhịp lại canvas; không
+            // có thì vẽ tĩnh — khỏi tốn CPU vẽ lại 15 lần/giây vô ích.
+            if hasAnimation {
+                TimelineView(.animation(minimumInterval: 1 / 15)) { tl in
+                    canvas(size, time: tl.date.timeIntervalSince(animStart))
+                }
+            } else {
+                canvas(size, time: 0)
+            }
+
+            if let id = editingID, let idx = annotations.firstIndex(where: { $0.id == id }) {
+                TextField("Text…", text: $annotations[idx].text)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 0.022 * size.width * unit, weight: .semibold))
+                    .foregroundStyle(annotations[idx].color)
+                    .frame(width: 240, alignment: .leading)
+                    .focused($textFocused)
+                    .offset(x: annotations[idx].points[0].x * size.width,
+                            y: annotations[idx].points[0].y * size.height)
+                    .onSubmit { editingID = nil }
+            }
+        }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .shadow(color: .black.opacity(shadow ? 0.5 : 0), radius: 16, y: 6)
+        .contentShape(Rectangle())
+        .gesture(drawGesture(size))
+        .simultaneousGesture(tapGesture(size))
+    }
+
     // Lớp annotation. Tách ra hàm riêng vì được gọi từ 2 nhánh (tĩnh / TimelineView).
     private func canvas(_ size: CGSize, time: Double) -> some View {
         Canvas { ctx, _ in
             for a in annotations where a.id != editingID {
-                Self.draw(a, base: image, size: size, time: time, in: &ctx)
+                Self.draw(a, base: image, size: size, time: time, unit: unit, in: &ctx)
             }
-            if let c = current { Self.draw(c, base: image, size: size, time: time, in: &ctx) }
+            if let c = current { Self.draw(c, base: image, size: size, time: time, unit: unit, in: &ctx) }
             // Khung + 4 handle góc khi đang chọn ảnh (chỉ ở tool Select).
             if tool == .select, let a = selectedImage {
                 Self.drawHandles(a, size: size, in: &ctx)
@@ -1142,13 +1276,15 @@ struct EditorView: View {
     // ── Draw one annotation, scaling normalized coords to `size` ───────────
     // `base` = ảnh nền, chỉ tool .blur cần (nó vẽ lại chính ảnh nền đã làm mờ).
     // `time` = giây tính từ lúc mở editor, để layer ảnh động lấy đúng frame.
+    /// `unit`: hệ số cỡ nét/chữ (xem InlineEditHost.unit), 1 ở cửa sổ editor.
     private static func draw(_ a: Annotation, base: NSImage?, size s: CGSize,
-                             time: Double, in ctx: inout GraphicsContext) {
+                             time: Double, unit: CGFloat = 1, in ctx: inout GraphicsContext) {
         func P(_ n: CGPoint) -> CGPoint { CGPoint(x: n.x * s.width, y: n.y * s.height) }
         guard let n0 = a.points.first else { return }
         let start = P(n0)
         let end = P(a.points.last ?? n0)
-        let lw = max(a.lineWidth * s.width, 1)
+        let W = s.width * unit                 // bề ngang "danh nghĩa" để tính cỡ
+        let lw = max(a.lineWidth * W, 1)
 
         switch a.tool {
         case .select:
@@ -1185,7 +1321,7 @@ struct EditorView: View {
         case .highlight:
             var p = Path(); p.move(to: start); p.addLine(to: end)
             ctx.stroke(p, with: .color(a.color.opacity(0.35)),
-                       style: StrokeStyle(lineWidth: 0.03 * s.width, lineCap: .round))
+                       style: StrokeStyle(lineWidth: 0.03 * W, lineCap: .round))
         case .blur:
             // Vẽ lại ẢNH NỀN đã làm mờ sẵn, cắt đúng khung đã kéo.
             //
@@ -1218,15 +1354,15 @@ struct EditorView: View {
                        style: StrokeStyle(lineWidth: lw, lineCap: .round, lineJoin: .round))
         case .arrow:
             drawArrow(from: start, to: end, color: a.color, lineWidth: lw,
-                      headLen: 0.02 * s.width + lw * 2, in: &ctx)
+                      headLen: 0.02 * W + lw * 2, in: &ctx)
         case .text:
             guard !a.text.isEmpty else { return }
             ctx.draw(Text(a.text)
-                        .font(.system(size: 0.022 * s.width, weight: .semibold))
+                        .font(.system(size: 0.022 * W, weight: .semibold))
                         .foregroundColor(a.color),
                      at: start, anchor: .topLeading)
         case .counter:
-            let r = 0.013 * s.width
+            let r = 0.013 * W
             let circle = Path(ellipseIn: CGRect(x: start.x - r, y: start.y - r,
                                                 width: r * 2, height: r * 2))
             ctx.fill(circle, with: .color(a.color))
@@ -1265,13 +1401,16 @@ struct EditorView: View {
     // ── Export at full resolution ──────────────────────────────────────────
     // Ảnh nền + mọi annotation, bẹp thành một lớp, ở thời điểm `time`.
     private func flattened(time: Double) -> some View {
-        let px = image.size
+        // Chụp giá trị RA TRƯỚC: closure của Canvas chạy lúc ImageRenderer vẽ, khi
+        // đó đọc thẳng @State có thể ra mảng rỗng (gọi từ key monitor — ⌘C của
+        // editor inline — thì ảnh xuất ra mất sạch nét vẽ).
+        let px = image.size, base = image, anns = annotations, unit = unit
         return ZStack {
-            Image(nsImage: image).resizable().interpolation(.high)
+            Image(nsImage: base).resizable().interpolation(.high)
                 .frame(width: px.width, height: px.height)
             Canvas { ctx, _ in
-                for a in annotations {
-                    Self.draw(a, base: image, size: px, time: time, in: &ctx)
+                for a in anns {
+                    Self.draw(a, base: base, size: px, time: time, unit: unit, in: &ctx)
                 }
             }
             .frame(width: px.width, height: px.height)
