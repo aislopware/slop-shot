@@ -4,6 +4,12 @@ Sinh từ commit log bằng [git-cliff](https://git-cliff.org). Mục nào nằm
 loại (type) của commit quyết định — tức quyết định lúc VIẾT commit, không phải lúc cắt
 release. Quy ước được `scripts/check-commit-msg.sh` chặn ngay ở hook commit-msg.
 
+## [0.9.1](https://github.com/aislopware/slop-shot/compare/v0.9.0...v0.9.1) — 2026-10-01
+
+### Bug fixes
+
+- Follow desktop switches during selection ([`52b2afe`](https://github.com/aislopware/slop-shot/commit/52b2afe75004b4ee5fa417a000df9236f84c4533))
+
 ## [0.9.0](https://github.com/aislopware/slop-shot/compare/v0.8.1...v0.9.0) — 2026-10-01
 
 ### Features
