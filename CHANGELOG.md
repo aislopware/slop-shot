@@ -4,6 +4,12 @@ Sinh từ commit log bằng [git-cliff](https://git-cliff.org). Mục nào nằm
 loại (type) của commit quyết định — tức quyết định lúc VIẾT commit, không phải lúc cắt
 release. Quy ước được `scripts/check-commit-msg.sh` chặn ngay ở hook commit-msg.
 
+## [0.8.1](https://github.com/aislopware/slop-shot/compare/v0.8.0...v0.8.1) — 2026-10-01
+
+### Documentation
+
+- Note brew trust needs Homebrew 6, upgrades reopen ([`f85497e`](https://github.com/aislopware/slop-shot/commit/f85497e4ed40ccee50b25ff860a3366550638dee))
+
 ## [0.8.0](https://github.com/aislopware/slop-shot/compare/v0.7.1...v0.8.0) — 2026-10-01
 
 ### Features
