@@ -147,7 +147,7 @@ struct EditorView: View {
     /// ⌘Z chỉ trả lại khi chưa vẽ thêm gì (trên cùng vẫn là nó), giữ đúng thứ tự.
     @State private var deleted: [(layer: Annotation, index: Int, top: UUID?)] = []
     @State private var current: Annotation?
-    @State private var tool: Tool = .arrow
+    @State private var tool: Tool = Tool(rawValue: UserDefaults.standard.string(forKey: Self.lastToolKey) ?? "") ?? .arrow
     @State private var color: Color = .red
     @State private var lineWidth: CGFloat = 0.005
     @State private var editingID: UUID?
@@ -375,7 +375,7 @@ struct EditorView: View {
                !(event.window?.firstResponder is NSText),
                let ch = event.charactersIgnoringModifiers?.uppercased(),
                let t = Tool.allCases.first(where: { $0.key == ch }) {
-                tool = t
+                pick(t)
                 return nil
             }
             guard event.modifierFlags.contains(.command) else { return event }
@@ -539,6 +539,15 @@ struct EditorView: View {
             return
         }
         annotations.append(redoStack.removeLast())
+    }
+
+    /// Tool người dùng tự chọn được nhớ cho lần mở editor sau (kiểu macshot).
+    /// Tự đổi sang Select lúc dán ảnh thì không tính.
+    private static let lastToolKey = "editor.lastTool"
+
+    private func pick(_ t: Tool) {
+        tool = t
+        UserDefaults.standard.set(t.rawValue, forKey: Self.lastToolKey)
     }
 
     // Xoá layer đang chọn (⌫), ⌘Z trả lại. Cũng là đường thoát khi Redact bôi
@@ -734,7 +743,7 @@ struct EditorView: View {
     }
 
     private func toolButton(_ t: Tool) -> some View {
-        Button { haptic(); tool = t; editingID = nil } label: {
+        Button { haptic(); pick(t); editingID = nil } label: {
             Image(systemName: t.icon)
                 .font(.system(size: 14, weight: .medium))
                 .frame(width: 30, height: 28)

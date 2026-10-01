@@ -174,28 +174,14 @@ final class ScreenCapturer: ObservableObject {
     func captureRegion() async {
         guard beginSession() else { return }
         defer { busy = false }
-        let screen = screenUnderCursor()
-
-        // ĐÓNG BĂNG màn hình NGAY lúc bấm phím tắt, TRƯỚC khi mở overlay.
-        // Nhờ vậy ảnh giữ đúng những gì đang thấy: app dưới có tự đóng lightbox,
-        // ẩn tooltip, đổi frame video… thì ảnh vẫn là khoảnh khắc lúc bấm phím.
-        let frozen = try? await captureDisplay(on: screen)
-
-        // Bọc callback chọn vùng thành async/await cho gọn (continuation = "Promise" của Swift).
-        // Vẽ ngay trên vùng chọn (kiểu macshot) cần ảnh đóng băng để làm nền.
-        let editInline = settings.editAfterSelect && frozen != nil
-        let rectInScreen: CGRect? = await withCheckedContinuation { cont in
-            selection.begin(on: screen, frozen: frozen, editInline: editInline) { rect in
-                cont.resume(returning: rect)
-            }
-        }
-
-        guard let rect = rectInScreen else {
+        guard let picked = await selectArea(editInline: settings.editAfterSelect) else {
             lastStatus = "Selection cancelled."
             return
         }
+        let (rect, screen, frozen) = (picked.rect, picked.screen, picked.frozen)
 
-        if editInline, let frozen {
+        // Vẽ ngay trên vùng chọn (kiểu macshot) cần ảnh đóng băng để làm nền.
+        if settings.editAfterSelect, let frozen {
             await editInPlace(frozen, rect: rect, on: screen)
             return
         }
@@ -222,17 +208,10 @@ final class ScreenCapturer: ObservableObject {
     func captureText() async {
         guard beginSession() else { return }
         defer { busy = false }
-        let screen = screenUnderCursor()
-        let frozen = try? await captureDisplay(on: screen)
-
-        let rect: CGRect? = await withCheckedContinuation { cont in
-            selection.begin(on: screen, frozen: frozen,
-                            tool: "Capture Text", toolIcon: "text.viewfinder",
-                            confirmTitle: "Read Text", confirmIcon: "text.viewfinder") {
-                cont.resume(returning: $0)
-            }
-        }
-        guard let rect else { lastStatus = "Text capture cancelled."; return }
+        guard let picked = await selectArea(tool: "Capture Text", toolIcon: "text.viewfinder",
+                                            confirmTitle: "Read Text", confirmIcon: "text.viewfinder")
+        else { lastStatus = "Text capture cancelled."; return }
+        let (rect, screen, frozen) = (picked.rect, picked.screen, picked.frozen)
 
         do {
             let cropped: CGImage
@@ -312,18 +291,12 @@ final class ScreenCapturer: ObservableObject {
     func captureScrollingArea() async {
         guard beginSession() else { return }
         defer { busy = false }
-        let screen = screenUnderCursor()
-        let frozen = try? await captureDisplay(on: screen)
-
-        let rect: CGRect? = await withCheckedContinuation { cont in
-            selection.begin(on: screen, frozen: frozen,
-                            tool: "Scrolling Capture", toolIcon: "arrow.up.and.down.text.horizontal",
-                            confirmTitle: "Start Scrolling Capture",
-                            confirmIcon: "arrow.up.and.down.text.horizontal") {
-                cont.resume(returning: $0)
-            }
-        }
-        guard let rect else { lastStatus = "Scrolling capture cancelled."; return }
+        guard let picked = await selectArea(tool: "Scrolling Capture",
+                                            toolIcon: "arrow.up.and.down.text.horizontal",
+                                            confirmTitle: "Start Scrolling Capture",
+                                            confirmIcon: "arrow.up.and.down.text.horizontal")
+        else { lastStatus = "Scrolling capture cancelled."; return }
+        let (rect, screen) = (picked.rect, picked.screen)
         try? await Task.sleep(nanoseconds: 150_000_000)
 
         recordingOverlay.show(rect: rect, on: screen)   // tối xung quanh + viền focus
@@ -367,21 +340,13 @@ final class ScreenCapturer: ObservableObject {
         guard beginSession() else { return }   // bắt đầu quay mới → đóng editor cũ (không lưu)
         defer { busy = false }
 
-        // Chọn màn hình đang có con trỏ (giống captureRegion).
-        let screen = screenUnderCursor()
-
-        // Kéo chuột chọn vùng (tái dùng overlay của chụp ảnh, có cả bắt dính).
-        let frozen = try? await captureDisplay(on: screen)
+        // Kéo chọn vùng trên màn nào cũng được (tái dùng overlay của chụp ảnh).
         // Kéo xong chưa quay ngay: khung ở lại để chỉnh, bấm "Start Recording"
         // (hoặc ↩) mới bắt đầu.
-        let rect: CGRect? = await withCheckedContinuation { cont in
-            selection.begin(on: screen, frozen: frozen,
-                            tool: "Record Area", toolIcon: "record.circle",
-                            confirmTitle: "Start Recording", confirmIcon: "record.circle") {
-                cont.resume(returning: $0)
-            }
-        }
-        guard let rect else { lastStatus = "Recording cancelled."; return }
+        guard let picked = await selectArea(tool: "Record Area", toolIcon: "record.circle",
+                                            confirmTitle: "Start Recording", confirmIcon: "record.circle")
+        else { lastStatus = "Recording cancelled."; return }
+        let (rect, screen) = (picked.rect, picked.screen)
 
         // Đợi overlay biến mất rồi mới bật stream (~150ms).
         try? await Task.sleep(nanoseconds: 150_000_000)
@@ -782,6 +747,28 @@ final class ScreenCapturer: ObservableObject {
     // ═══════════════════════════════════════════════════════════════════════
 
     // Màn hình đang có con trỏ chuột (xài đa màn hình vẫn đúng).
+    /// ĐÓNG BĂNG mọi màn hình NGAY lúc bấm phím tắt, TRƯỚC khi mở overlay —
+    /// ảnh giữ đúng những gì đang thấy (app dưới có tự đóng lightbox, ẩn
+    /// tooltip, đổi frame video… cũng kệ) — rồi cho chọn vùng trên màn nào cũng được.
+    private func selectArea(tool: String = "Capture Area", toolIcon: String = "camera.viewfinder",
+                            confirmTitle: String = "Capture", confirmIcon: String = "camera.fill",
+                            editInline: Bool = false) async -> RegionSelection? {
+        let screens = NSScreen.screens
+        var frozen = [CGImage?](repeating: nil, count: screens.count)
+        await withTaskGroup(of: (Int, CGImage?).self) { group in
+            for (i, screen) in screens.enumerated() {
+                group.addTask { @MainActor in (i, try? await self.captureDisplay(on: screen)) }
+            }
+            for await (i, image) in group { frozen[i] = image }
+        }
+        return await withCheckedContinuation { cont in
+            selection.begin(on: Array(zip(screens, frozen)).map { (screen: $0, frozen: $1) },
+                            tool: tool, toolIcon: toolIcon,
+                            confirmTitle: confirmTitle, confirmIcon: confirmIcon,
+                            editInline: editInline) { cont.resume(returning: $0) }
+        }
+    }
+
     private func screenUnderCursor() -> NSScreen {
         let mouse = NSEvent.mouseLocation
         return NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }

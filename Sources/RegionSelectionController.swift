@@ -43,6 +43,9 @@ final class SelectionModel: ObservableObject {
     @Published var hover: SnapTarget?
     @Published var cursor: CGPoint = .zero
     @Published var dragging = false
+    /// Con trỏ đang ở màn này. Có nhiều màn thì chỉ màn có con trỏ hiện chữ thập
+    /// và kính lúp — màn kia mà còn vẽ ở vị trí cũ thì như có hai con trỏ.
+    @Published var pointerInside = true
     @Published var interacted = false        // đã kéo/bấm lần nào chưa (để ẩn hint)
     @Published var guideXs: [CGFloat] = []   // đường gióng khi cạnh bị hút
     @Published var guideYs: [CGFloat] = []
@@ -198,7 +201,7 @@ struct SelectionOverlay: View {
             ctx.fill(Path(hover.rect), with: .color(Color(nsColor: .controlAccentColor).opacity(0.12)))
             ctx.stroke(Path(hover.rect.insetBy(dx: -1, dy: -1)),
                        with: .color(Color(nsColor: .controlAccentColor)), lineWidth: 2)
-        } else {
+        } else if model.pointerInside {
             drawCrosshair(&ctx, in: bounds)
         }
     }
@@ -336,7 +339,7 @@ struct SelectionOverlay: View {
     /// Chỉ hiện khi chưa khoanh gì, hoặc đang kéo.
     @ViewBuilder
     private func loupe(in bounds: CGRect) -> some View {
-        if let cg = model.frozen, model.currentRect.isEmpty || model.dragging {
+        if let cg = model.frozen, model.pointerInside, model.currentRect.isEmpty || model.dragging {
             let box = OverlayChrome.loupeBox(cursor: model.cursor, in: bounds,
                                              side: loupeSide, reserveBelow: 44)
             let color = OverlayChrome.pixelColor(in: cg, at: model.cursor, scale: model.scaleFactor)
@@ -363,6 +366,8 @@ final class SelectionEventView: NSView {
     // Callback trả kết quả ra ngoài (giống props onSelected / onCancel).
     var onSelected: ((CGRect) -> Void)?   // rect theo points, gốc trên-trái màn hình
     var onCancel: (() -> Void)?
+    var onPointerEntered: (() -> Void)?
+    var onMouseDown: (() -> Void)?
 
     let model: SelectionModel
 
@@ -594,7 +599,31 @@ final class SelectionEventView: NSView {
     }
 
     // ── Sự kiện chuột / phím ─────────────────────────────────────────────
+    override func mouseEntered(with event: NSEvent) {
+        model.pointerInside = true
+        onPointerEntered?()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        model.pointerInside = false
+        if model.hover != nil { model.hover = nil }
+    }
+
+    /// Bắt đầu chọn ở màn khác → màn này bỏ khung đang dở, về như lúc mới mở.
+    func reset() {
+        startPoint = nil
+        grab = nil
+        spaceMove = false
+        model.currentRect = .zero
+        model.adjusting = false
+        model.dragging = false
+        model.hoverButton = nil
+        model.guideXs = []; model.guideYs = []
+        window?.invalidateCursorRects(for: self)
+    }
+
     override func mouseMoved(with event: NSEvent) {
+        model.pointerInside = true
         model.cursor = convert(event.locationInWindow, from: nil)
         freeMode = event.modifierFlags.contains(.option)
         if model.adjusting { updateAdjustCursor(); return }
@@ -614,6 +643,7 @@ final class SelectionEventView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        onMouseDown?()
         let p = convert(event.locationInWindow, from: nil)
         if model.adjusting {
             model.cursor = p
@@ -781,32 +811,55 @@ final class SelectionEventView: NSView {
     }
 }
 
+/// Kết quả chọn vùng: khung (points, gốc trên-trái của `screen`), màn hình
+/// được chọn và ảnh đóng băng của màn đó.
+struct RegionSelection {
+    let rect: CGRect
+    let screen: NSScreen
+    let frozen: CGImage?
+}
+
 // ─────────────────────────────────────────────────────────────────────────
-// Controller: mở overlay trên 1 màn hình, chờ user chọn, gọi completion.
-// completion trả về rect (points, gốc trên-trái của màn hình đó) hoặc nil nếu huỷ.
+// Controller: phủ overlay lên MỌI màn hình, chọn ở màn nào thì trả về màn đó.
+// Khung chọn không vắt qua hai màn: mặc định mỗi màn một Space, một cửa sổ
+// không trải qua hai màn được — editor vẽ ngay trên vùng chọn thì cần thế.
 //
-// `frozen` = ảnh chụp sẵn của màn hình đó (đóng băng khung hình). Có nó thì:
+// `frozen` = ảnh chụp sẵn của từng màn (đóng băng khung hình). Có nó thì:
 //   • overlay hiện đúng nội dung lúc bấm phím tắt (app dưới có đổi gì cũng kệ)
 //   • bật được kính lúp + bắt dính theo biên ảnh
 // ─────────────────────────────────────────────────────────────────────────
 @MainActor
 final class RegionSelectionController {
-    private var window: OverlayPanel?
+    /// Lớp phủ trên một màn hình.
+    private final class Pane {
+        let screen: NSScreen
+        let frozen: CGImage?
+        let window: OverlayPanel
+        let model: SelectionModel
+        let view: SelectionEventView
 
+        init(screen: NSScreen, frozen: CGImage?, window: OverlayPanel,
+             model: SelectionModel, view: SelectionEventView) {
+            self.screen = screen; self.frozen = frozen; self.window = window
+            self.model = model; self.view = view
+        }
+    }
+
+    private var panes: [Pane] = []
     private var escMonitor: Any?
     private var cancelCurrent: (() -> Void)?
-    private var model: SelectionModel?
-    private weak var eventView: SelectionEventView?
 
     /// Đóng lớp phủ đang mở (nếu có), coi như huỷ.
     func cancel() { cancelCurrent?() }
 
-    /// Chọn xong (kiểu inline): gỡ phần bắt chuột/phím của bước chọn, lớp phủ
-    /// vẫn nằm đó chờ editor.
-    private func detachSelection() {
+    /// Chọn xong (kiểu inline): chỉ giữ lại màn vừa chọn, gỡ phần bắt chuột/phím
+    /// của bước chọn; lớp phủ nằm đó chờ editor.
+    private func detachSelection(keeping pane: Pane) {
         if let escMonitor { NSEvent.removeMonitor(escMonitor) }
         escMonitor = nil
-        eventView?.removeFromSuperview()
+        for other in panes where other !== pane { OverlayChrome.close(other.window, fade: false) }
+        panes = [pane]
+        pane.view.removeFromSuperview()
         cancelCurrent = { [weak self] in self?.cleanup(fade: true) }
     }
 
@@ -814,7 +867,7 @@ final class RegionSelectionController {
     /// nhận ảnh đã vẽ + việc cần làm, hoặc nil nếu huỷ; lớp phủ tự đóng.
     func showInlineEditor(image: NSImage, rect: CGRect,
                           completion: @escaping ((NSImage, InlineEditHost.Action)?) -> Void) {
-        guard let win = window, let backdrop = win.contentView else { completion(nil); return }
+        guard let pane = panes.first, let backdrop = pane.window.contentView else { completion(nil); return }
         var done = false
         let finish: ((NSImage, InlineEditHost.Action)?) -> Void = { [weak self] result in
             guard !done else { return }
@@ -822,27 +875,95 @@ final class RegionSelectionController {
             self?.cleanup(fade: result == nil)
             completion(result)
         }
-        model?.inlineEditing = true
+        pane.model.inlineEditing = true
         let host = InlineEditHost(rect: rect) { img, action in finish((img, action)) }
         let editor = EditorView(image: image, sourceURL: nil, onClose: { finish(nil) }, inline: host)
         let hv = NSHostingView(rootView: editor)
         hv.frame = backdrop.bounds
         hv.autoresizingMask = [.width, .height]
         backdrop.addSubview(hv)
-        win.makeFirstResponder(hv)
+        pane.window.makeFirstResponder(hv)
         cancelCurrent = { finish(nil) }
     }
 
+    /// `displays`: các màn hình cùng ảnh đóng băng của từng màn.
     /// `confirmTitle` / `confirmIcon`: chữ trên nút xác nhận ở bước chỉnh khung
-    /// ("Capture", "Start Recording"…).
-    func begin(on screen: NSScreen, frozen: CGImage? = nil,
+    /// ("Capture", "Start Recording"…). `editInline` chỉ có tác dụng ở màn có
+    /// ảnh đóng băng.
+    func begin(on displays: [(screen: NSScreen, frozen: CGImage?)],
                tool: String = "Capture Area", toolIcon: String = "camera.viewfinder",
                confirmTitle: String = "Capture", confirmIcon: String = "camera.fill",
                editInline: Bool = false,
-               completion: @escaping (CGRect?) -> Void) {
+               completion: @escaping (RegionSelection?) -> Void) {
         // Phiên cũ còn mở (phím tắt bấm dồn) → huỷ nó trước, không để lại một
         // lớp phủ mồ côi che màn hình mà không ai đóng.
         cancelCurrent?()
+
+        // completion chỉ được phép chạy ĐÚNG 1 lần. Nếu không, các sự kiện dồn
+        // nhau (Esc lúc đang kéo chuột, Esc nhấn 2 lần, Esc sát lúc thả chuột)
+        // có thể bắn callback 2 lần → withCheckedContinuation resume 2 lần →
+        // fatalError "continuation misuse" → CẢ APP TẮT. Guard 1-lần ở đây.
+        var finished = false
+        let finishOnce: (Pane?, CGRect?) -> Void = { [weak self] pane, rect in
+            guard !finished else { return }
+            finished = true
+            guard let pane, let rect else {
+                self?.cleanup(fade: true)
+                completion(nil)
+                return
+            }
+            // editInline: chọn xong thì GIỮ lớp phủ — showInlineEditor sẽ đắp
+            // editor lên đúng cửa sổ này, không đóng-mở lại nên không nháy.
+            if editInline, pane.frozen != nil { self?.detachSelection(keeping: pane) } else { self?.cleanup() }
+            completion(RegionSelection(rect: rect, screen: pane.screen, frozen: pane.frozen))
+        }
+
+        let mouse = NSEvent.mouseLocation
+        panes = displays.map { d in
+            makePane(on: d.screen, frozen: d.frozen, tool: tool, toolIcon: toolIcon,
+                     confirmTitle: confirmTitle, confirmIcon: confirmIcon,
+                     skipAdjust: editInline && d.frozen != nil,
+                     hasPointer: NSMouseInRect(mouse, d.screen.frame, false))
+        }
+        for pane in panes {
+            pane.view.onSelected = { [weak pane] rect in finishOnce(pane, rect) }
+            pane.view.onCancel = { finishOnce(nil, nil) }
+            pane.view.onPointerEntered = { [weak self, weak pane] in
+                if let pane { self?.focus(pane) }
+            }
+            pane.view.onMouseDown = { [weak self, weak pane] in
+                guard let self, let pane else { return }
+                for other in self.panes where other !== pane { other.view.reset() }
+            }
+        }
+        cancelCurrent = { finishOnce(nil, nil) }
+
+        // Lưới an toàn cho ⎋: có lúc view mất first responder (bấm trúng lớp
+        // khác, panel khác thành key…) và keyDown không tới nữa — ⎋ vẫn phải
+        // thoát được, không thì người dùng kẹt dưới một lớp phủ kín màn hình.
+        escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.keyCode == 53 else { return event }
+            MainActor.assumeIsolated { finishOnce(nil, nil) }
+            return nil
+        }
+
+        for pane in panes { present(pane) }
+        if let active = panes.first(where: { $0.model.pointerInside }) ?? panes.first { focus(active) }
+    }
+
+    /// Bàn phím đi theo con trỏ: Space, ⇧, F, ↩ phải tới màn đang chọn. Đang
+    /// giữ chuột (kéo từ màn kia sang) thì thôi — cú kéo vẫn thuộc màn cũ.
+    private func focus(_ pane: Pane) {
+        guard NSEvent.pressedMouseButtons == 0 else { return }
+        // KHÔNG gọi NSApp.activate: app đang dùng giữ nguyên trạng thái, nên
+        // Telegram/Preview… không tự thoát chế độ xem ảnh phóng to nữa.
+        pane.window.makeKey()
+        pane.window.makeFirstResponder(pane.view)
+    }
+
+    private func makePane(on screen: NSScreen, frozen: CGImage?, tool: String, toolIcon: String,
+                          confirmTitle: String, confirmIcon: String,
+                          skipAdjust: Bool, hasPointer: Bool) -> Pane {
         let size = screen.frame.size
         let model = SelectionModel()
         // Tỉ lệ point→pixel lấy từ chính ảnh đóng băng (khớp với ảnh sẽ cắt ra),
@@ -858,32 +979,19 @@ final class RegionSelectionController {
         model.hintText = model.snapEnabled
             ? "Drag to capture · click a highlighted area · ⌥ free · esc"
             : "Drag to capture · esc to cancel"
+        model.skipAdjust = skipAdjust
+        model.pointerInside = hasPointer
 
-        model.skipAdjust = editInline
         let view = SelectionEventView(frame: NSRect(origin: .zero, size: size), model: model)
-        self.model = model
-        self.eventView = view
         view.autoresizingMask = [.width, .height]
         // Lấy danh sách cửa sổ TRƯỚC khi overlay hiện lên (khỏi dính chính mình).
         if model.snapEnabled {
             view.windows = WindowSnapper.snapshot(on: screen)
             // Chuột đang ở đâu → khoanh sẵn ngay chỗ đó (mouseMoved chưa bắn lần nào).
-            let m = NSEvent.mouseLocation
-            view.primeCursor(NSPoint(x: m.x - screen.frame.minX, y: screen.frame.maxY - m.y))
-        }
-
-        // completion chỉ được phép chạy ĐÚNG 1 lần. Nếu không, các sự kiện dồn
-        // nhau (Esc lúc đang kéo chuột, Esc nhấn 2 lần, Esc sát lúc thả chuột)
-        // có thể bắn callback 2 lần → withCheckedContinuation resume 2 lần →
-        // fatalError "continuation misuse" → CẢ APP TẮT. Guard 1-lần ở đây.
-        var finished = false
-        let finishOnce: (CGRect?) -> Void = { [weak self] rect in
-            guard !finished else { return }
-            finished = true
-            // editInline: chọn xong thì GIỮ lớp phủ — showInlineEditor sẽ đắp
-            // editor lên đúng cửa sổ này, không đóng-mở lại nên không nháy.
-            if editInline, rect != nil { self?.detachSelection() } else { self?.cleanup(fade: rect == nil) }
-            completion(rect)
+            if hasPointer {
+                let m = NSEvent.mouseLocation
+                view.primeCursor(NSPoint(x: m.x - screen.frame.minX, y: screen.frame.maxY - m.y))
+            }
         }
 
         // Nền = ảnh đóng băng, dán thẳng vào layer (GPU lo phần vẽ lại).
@@ -914,37 +1022,6 @@ final class RegionSelectionController {
         win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         win.contentView = backdrop
 
-        view.onSelected = { rect in finishOnce(rect) }
-        view.onCancel = { finishOnce(nil) }
-        cancelCurrent = { finishOnce(nil) }
-
-        // Lưới an toàn cho ⎋: có lúc view mất first responder (bấm trúng lớp
-        // khác, panel khác thành key…) và keyDown không tới nữa — ⎋ vẫn phải
-        // thoát được, không thì người dùng kẹt dưới một lớp phủ kín màn hình.
-        escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard event.keyCode == 53 else { return event }
-            MainActor.assumeIsolated { finishOnce(nil) }
-            return nil
-        }
-
-        if frozen == nil {
-            // Không có ảnh đóng băng (fallback): hiện ở alpha 0 rồi fade nhanh,
-            // nếu order-front thẳng ở alpha 1 sẽ lộ 1 frame ĐEN trước khi view vẽ.
-            win.alphaValue = 0
-            win.makeKeyAndOrderFront(nil)
-            win.displayIfNeeded()
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.1
-                win.animator().alphaValue = 1
-            }
-        } else {
-            win.makeKeyAndOrderFront(nil)
-        }
-        // KHÔNG gọi NSApp.activate: app đang dùng giữ nguyên trạng thái, nên
-        // Telegram/Preview… không tự thoát chế độ xem ảnh phóng to nữa.
-        win.makeFirstResponder(view)
-        self.window = win
-
         // Phân tích biên ảnh ở luồng nền (~20-40ms). Trong lúc chờ, snap vẫn
         // chạy được bằng hình học cửa sổ.
         if let frozen, model.snapEnabled {
@@ -956,6 +1033,24 @@ final class RegionSelectionController {
                 view?.snap = engine
             }
         }
+        return Pane(screen: screen, frozen: frozen, window: win, model: model, view: view)
+    }
+
+    private func present(_ pane: Pane) {
+        let win = pane.window
+        if pane.frozen == nil {
+            // Không có ảnh đóng băng (fallback): hiện ở alpha 0 rồi fade nhanh,
+            // nếu order-front thẳng ở alpha 1 sẽ lộ 1 frame ĐEN trước khi view vẽ.
+            win.alphaValue = 0
+            win.orderFrontRegardless()
+            win.displayIfNeeded()
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.1
+                win.animator().alphaValue = 1
+            }
+        } else {
+            win.orderFrontRegardless()
+        }
     }
 
     /// `fade`: chỉ khi HUỶ. Chọn xong thì phải biến mất ngay — luồng sau (quay,
@@ -964,8 +1059,7 @@ final class RegionSelectionController {
         if let escMonitor { NSEvent.removeMonitor(escMonitor) }
         escMonitor = nil
         cancelCurrent = nil
-        if let win = window { OverlayChrome.close(win, fade: fade) }
-        window = nil
-        model = nil
+        for pane in panes { OverlayChrome.close(pane.window, fade: fade) }
+        panes = []
     }
 }
