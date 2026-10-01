@@ -88,6 +88,14 @@ struct Annotation: Identifiable {
     var isAnimated: Bool { seq?.isAnimated == true }
 }
 
+/// Cú kéo chuột đang làm gì.
+private enum LayerDrag {
+    case move(UUID)
+    case corner(UUID, Int)   // co giãn hình khung theo góc: 0=TL 1=TR 2=BR 3=BL
+    case end(UUID, Int)      // kéo một đầu mút đường kẻ / mũi tên: 0 = đầu, 1 = cuối
+    case draw                // không đụng layer nào → vẽ nét mới
+}
+
 struct NamedColor: Identifiable {
     let id = UUID()
     let name: String
@@ -132,10 +140,12 @@ struct EditorView: View {
     @State private var redoStack: [Annotation] = []   // các nét đã undo, chờ redo
     @State private var clearedBackup: [Annotation]?   // ảnh chụp annotation lúc bấm Clear (để Undo khôi phục cả loạt)
     @State private var keyMonitor: Any?               // theo dõi ⌘Z/⌘⇧Z/⌘V khi editor mở
-    @State private var dragStartNorm: CGPoint?        // điểm trước đó khi kéo bằng Select
-    @State private var dragTargetID: UUID?            // layer đang bị kéo
+    @State private var dragStartNorm: CGPoint?        // điểm trước đó khi đang kéo một layer
+    @State private var drag: LayerDrag?               // cú kéo hiện tại đang làm gì với layer nào
     @State private var selectedID: UUID?              // layer đang được chọn (hiện handle)
-    @State private var resizeCorner: Int?             // góc đang kéo resize: 0=TL 1=TR 2=BR 3=BL
+    /// Layer bị ⌫ xoá, kèm vị trí cũ và layer nằm trên cùng ngay sau khi xoá:
+    /// ⌘Z chỉ trả lại khi chưa vẽ thêm gì (trên cùng vẫn là nó), giữ đúng thứ tự.
+    @State private var deleted: [(layer: Annotation, index: Int, top: UUID?)] = []
     @State private var current: Annotation?
     @State private var tool: Tool = .arrow
     @State private var color: Color = .red
@@ -487,6 +497,13 @@ struct EditorView: View {
             status = ""
             return
         }
+        if let d = deleted.last, annotations.last?.id == d.top {
+            deleted.removeLast()
+            annotations.insert(d.layer, at: min(d.index, annotations.count))
+            selectedID = d.layer.id
+            status = ""
+            return
+        }
         guard let last = annotations.last else { return }
         // Nét trên cùng thuộc lô redact → gỡ NGUYÊN lô. Bôi 6 chỗ một phát mà bắt
         // bấm ⌘Z sáu lần thì vô duyên.
@@ -524,17 +541,17 @@ struct EditorView: View {
         annotations.append(redoStack.removeLast())
     }
 
-    // Xoá layer đang chọn (⌫). Đây là đường thoát khi Redact bôi nhầm một ô:
-    // đổi sang Select, bấm vào ô đó, ⌫.
+    // Xoá layer đang chọn (⌫), ⌘Z trả lại. Cũng là đường thoát khi Redact bôi
+    // nhầm một ô: bấm vào ô đó, ⌫.
     private func deleteSelected() {
         guard let id = selectedID,
               let idx = annotations.firstIndex(where: { $0.id == id }) else { return }
         let removed = annotations.remove(at: idx)
-        redoStack.append(removed)
+        deleted.append((removed, idx, annotations.last?.id))
         redoBatch.remove(id)        // xoá lẻ thì nó không còn thuộc lô nào nữa
         redactBatch.remove(id)
         selectedID = nil
-        status = "Deleted \(removed.tool.label.lowercased()) layer"
+        status = "Deleted \(removed.tool.label.lowercased()) — ⌘Z to undo"
     }
 
     // Xóa SẠCH annotation trong 1 lần (đỡ phải Undo từng nét). Lưu lại loạt vừa
@@ -551,6 +568,7 @@ struct EditorView: View {
             redactHint = redactedMatches.count
         }
         redactBatch = []; redoBatch = []
+        deleted = []
         selectedID = nil
         editingID = nil
         current = nil
@@ -627,9 +645,8 @@ struct EditorView: View {
                 Self.draw(a, base: image, size: size, time: time, unit: unit, in: &ctx)
             }
             if let c = current { Self.draw(c, base: image, size: size, time: time, unit: unit, in: &ctx) }
-            // Khung + 4 handle góc khi đang chọn ảnh (chỉ ở tool Select).
-            if tool == .select, let a = selectedImage {
-                Self.drawHandles(a, size: size, in: &ctx)
+            if let id = selectedID, id != editingID, let a = annotations.first(where: { $0.id == id }) {
+                Self.drawSelection(a, size: size, unit: unit, in: &ctx)
             }
         }
         .frame(width: size.width, height: size.height)
@@ -1048,13 +1065,14 @@ struct EditorView: View {
         CGPoint(x: p.x / s.width, y: p.y / s.height)
     }
 
-    // Tìm layer trên cùng chứa điểm p (duyệt ngược = từ trên xuống dưới).
-    private func hitTest(_ p: CGPoint) -> UUID? {
-        for a in annotations.reversed() {
-            guard let r = Self.boundingRect(a) else { continue }
-            if r.insetBy(dx: -0.012, dy: -0.012).contains(p) { return a.id }
-        }
-        return nil
+    /// Layer trên cùng (duyệt ngược) bị bấm trúng tại p (px). `loose`: chỉ cần
+    /// nằm trong khung bao — dùng ở tool Select. Còn lại phải trúng nét thật,
+    /// để bấm vào giữa một khung chữ nhật rỗng vẫn vẽ được nét mới ở đó.
+    private func hitTest(_ p: CGPoint, in s: CGSize, loose: Bool) -> UUID? {
+        annotations.reversed().first { a in
+            loose ? Self.frame(of: a, in: s, unit: unit)?.insetBy(dx: -6, dy: -6).contains(p) == true
+                  : Self.hits(a, p, in: s, unit: unit)
+        }?.id
     }
 
     private static func boundingRect(_ a: Annotation) -> CGRect? {
@@ -1067,40 +1085,94 @@ struct EditorView: View {
         return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
     }
 
-    // Layer ảnh đang được chọn (nil nếu không có / không phải ảnh).
-    private var selectedImage: Annotation? {
-        guard let id = selectedID,
-              let a = annotations.first(where: { $0.id == id }), a.tool == .image
-        else { return nil }
-        return a
-    }
-
-    // 4 góc của 1 annotation theo thứ tự TL, TR, BR, BL (normalized).
-    private static func corners(_ a: Annotation) -> [CGPoint] {
-        guard let r = boundingRect(a) else { return [] }
-        return [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY),
-                CGPoint(x: r.maxX, y: r.maxY), CGPoint(x: r.minX, y: r.maxY)]
-    }
-
-    // Bấm gần góc nào (trả index) — tol theo normalized (~ vài chục px).
-    private func nearCorner(_ p: CGPoint, of a: Annotation) -> Int? {
-        let tol: CGFloat = 0.02
-        for (i, c) in Self.corners(a).enumerated() {
-            if abs(p.x - c.x) < tol && abs(p.y - c.y) < tol { return i }
+    /// Chỗ layer chiếm trên khung vẽ (px), tính cả bề dày nét — phải khớp `draw`.
+    private static func frame(of a: Annotation, in s: CGSize, unit: CGFloat) -> CGRect? {
+        guard let n = a.points.first else { return nil }
+        let W = s.width * unit, p0 = CGPoint(x: n.x * s.width, y: n.y * s.height)
+        switch a.tool {
+        case .text:
+            let font = NSFont.systemFont(ofSize: 0.022 * W, weight: .semibold)
+            let size = (a.text.isEmpty ? " " : a.text).size(withAttributes: [.font: font])
+            return CGRect(origin: p0, size: size)
+        case .counter:
+            let r = 0.013 * W
+            return CGRect(x: p0.x - r, y: p0.y - r, width: r * 2, height: r * 2)
+        default:
+            guard let b = boundingRect(a) else { return nil }
+            let half = (a.tool == .highlight ? 0.03 * W : max(a.lineWidth * W, 1)) / 2
+            let r = CGRect(x: b.minX * s.width, y: b.minY * s.height,
+                           width: b.width * s.width, height: b.height * s.height)
+            return [.blur, .censor, .image].contains(a.tool) ? r : r.insetBy(dx: -half, dy: -half)
         }
-        return nil
     }
 
-    // Vẽ khung chọn + ô vuông trắng ở 4 góc.
-    private static func drawHandles(_ a: Annotation, size s: CGSize,
-                                    in ctx: inout GraphicsContext) {
-        guard let r = boundingRect(a) else { return }
-        let box = CGRect(x: r.minX * s.width, y: r.minY * s.height,
-                         width: r.width * s.width, height: r.height * s.height)
-        ctx.stroke(Path(box), with: .color(.white.opacity(0.9)),
-                   style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+    /// p (px) có trúng layer không. Hình rỗng và đường kẻ: phải gần nét vẽ.
+    /// Hình đặc (ảnh, ô che, chữ, số): bấm vào trong là trúng.
+    private static func hits(_ a: Annotation, _ p: CGPoint, in s: CGSize, unit: CGFloat) -> Bool {
+        let W = s.width * unit
+        let pts = a.points.map { CGPoint(x: $0.x * s.width, y: $0.y * s.height) }
+        guard let first = pts.first, let last = pts.last else { return false }
+        let tol = (a.tool == .highlight ? 0.03 * W : max(a.lineWidth * W, 1)) / 2 + 6
+        func near(_ u: CGPoint, _ v: CGPoint) -> Bool {
+            let dx = v.x - u.x, dy = v.y - u.y, len2 = dx * dx + dy * dy
+            let t = len2 == 0 ? 0 : max(0, min(1, ((p.x - u.x) * dx + (p.y - u.y) * dy) / len2))
+            return hypot(p.x - (u.x + t * dx), p.y - (u.y + t * dy)) <= tol
+        }
+        switch a.tool {
+        case .line, .arrow, .highlight:
+            return near(first, last)
+        case .pen:
+            return pts.count == 1 ? near(first, first) : zip(pts, pts.dropFirst()).contains { near($0, $1) }
+        case .rect:
+            let r = rect(first, last)
+            let inner = r.insetBy(dx: tol, dy: tol)
+            return r.insetBy(dx: -tol, dy: -tol).contains(p) && !(inner.isNull == false && inner.contains(p))
+        case .ellipse:
+            let r = rect(first, last)
+            let rx = r.width / 2, ry = r.height / 2
+            guard rx > tol, ry > tol else { return r.insetBy(dx: -tol, dy: -tol).contains(p) }
+            let d = hypot((p.x - r.midX) / rx, (p.y - r.midY) / ry)
+            return abs(d - 1) * min(rx, ry) <= tol
+        case .select:
+            return false
+        case .blur, .censor, .image, .text, .counter:
+            return frame(of: a, in: s, unit: unit)?.insetBy(dx: -4, dy: -4).contains(p) == true
+        }
+    }
+
+    /// Tay nắm của layer (normalized). Hình khung: 4 góc TL, TR, BR, BL để
+    /// co giãn. Đường kẻ / mũi tên: 2 đầu mút. Nét bút, chữ, số: không có —
+    /// chỉ kéo đi được.
+    private static func grips(_ a: Annotation) -> [CGPoint] {
+        switch a.tool {
+        case .rect, .ellipse, .blur, .censor, .image:
+            guard let r = boundingRect(a) else { return [] }
+            return [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY),
+                    CGPoint(x: r.maxX, y: r.maxY), CGPoint(x: r.minX, y: r.maxY)]
+        case .line, .arrow, .highlight:
+            guard let f = a.points.first, let l = a.points.last else { return [] }
+            return [f, l]
+        default:
+            return []
+        }
+    }
+
+    /// Tay nắm nằm dưới p (px), nếu có.
+    private static func grip(at p: CGPoint, of a: Annotation, in s: CGSize) -> Int? {
+        grips(a).firstIndex { hypot(p.x - $0.x * s.width, p.y - $0.y * s.height) <= 9 }
+    }
+
+    // Khung nét đứt quanh layer đang chọn + ô vuông trắng ở các tay nắm.
+    private static func drawSelection(_ a: Annotation, size s: CGSize, unit: CGFloat,
+                                      in ctx: inout GraphicsContext) {
+        guard let box = frame(of: a, in: s, unit: unit)?.insetBy(dx: -3, dy: -3) else { return }
         let hs: CGFloat = 9
-        for c in corners(a) {
+        let handles = grips(a)
+        if handles.count != 2 {      // đường kẻ thì 2 tay nắm là đủ thấy, khỏi đóng khung
+            ctx.stroke(Path(box), with: .color(.white.opacity(0.9)),
+                       style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+        }
+        for c in handles {
             let center = CGPoint(x: c.x * s.width, y: c.y * s.height)
             let sq = CGRect(x: center.x - hs / 2, y: center.y - hs / 2, width: hs, height: hs)
             ctx.fill(Path(roundedRect: sq, cornerRadius: 2), with: .color(.white))
@@ -1180,60 +1252,67 @@ struct EditorView: View {
         }
     }
 
+    /// Mới nhấn chuột xuống ở start (px): quyết định cú kéo này làm gì. Trúng
+    /// tay nắm của layer đang chọn → co giãn; trúng một layer → chọn và kéo nó
+    /// đi (ở mọi tool, kiểu macshot); chỗ trống → vẽ nét mới.
+    private func beginDrag(at start: CGPoint, _ s: CGSize) -> LayerDrag {
+        if let id = selectedID, let i = annotations.firstIndex(where: { $0.id == id }),
+           let g = Self.grip(at: start, of: annotations[i], in: s) {
+            if Self.grips(annotations[i]).count == 2 { return .end(id, g) }
+            // resize() coi points[0] là góc trên-trái — vẽ ngược tay thì không phải.
+            if let r = Self.boundingRect(annotations[i]) {
+                annotations[i].points = [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.maxY)]
+            }
+            return .corner(id, g)
+        }
+        if let hit = hitTest(start, in: s, loose: tool == .select) {
+            selectedID = hit
+            return .move(hit)
+        }
+        selectedID = nil
+        return .draw
+    }
+
     private func drawGesture(_ size: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 4)
             .onChanged { v in
-                // Select: kéo để DI CHUYỂN, hoặc kéo GÓC để resize.
-                if tool == .select {
-                    let p = norm(v.location, size)
-                    if dragStartNorm == nil {
-                        let start = norm(v.startLocation, size)
-                        dragStartNorm = start
-                        // Đang chọn ảnh & bấm trúng 1 góc → vào chế độ resize.
-                        if let img = selectedImage, let corner = nearCorner(start, of: img) {
-                            resizeCorner = corner
-                            dragTargetID = img.id
-                        } else {
-                            resizeCorner = nil
-                            let hit = hitTest(start)
-                            dragTargetID = hit
-                            selectedID = hit   // kéo trúng layer nào thì chọn layer đó
-                        }
-                    }
-                    if let id = dragTargetID,
-                       let idx = annotations.firstIndex(where: { $0.id == id }) {
-                        if let corner = resizeCorner {
-                            resize(&annotations[idx], corner: corner, to: p)
-                        } else if let prev = dragStartNorm {
-                            let dx = p.x - prev.x, dy = p.y - prev.y
-                            annotations[idx].points = annotations[idx].points
-                                .map { CGPoint(x: $0.x + dx, y: $0.y + dy) }
-                        }
-                    }
-                    dragStartNorm = p
-                    return
-                }
-                guard tool.drawsOnDrag else { return }
                 let p = norm(v.location, size)
-                if current == nil {
-                    current = Annotation(tool: tool, color: color, lineWidth: lineWidth,
-                                         points: [norm(v.startLocation, size), p])
-                } else if tool == .pen {
-                    current?.points.append(p)
-                } else {
-                    current?.points[1] = p
+                if drag == nil {
+                    drag = beginDrag(at: v.startLocation, size)
+                    dragStartNorm = norm(v.startLocation, size)
+                }
+                defer { dragStartNorm = p }
+                switch drag {
+                case .move(let id)?:
+                    guard let i = annotations.firstIndex(where: { $0.id == id }),
+                          let prev = dragStartNorm else { return }
+                    let dx = p.x - prev.x, dy = p.y - prev.y
+                    annotations[i].points = annotations[i].points.map { CGPoint(x: $0.x + dx, y: $0.y + dy) }
+                case .corner(let id, let corner)?:
+                    guard let i = annotations.firstIndex(where: { $0.id == id }) else { return }
+                    resize(&annotations[i], corner: corner, to: p)
+                case .end(let id, let end)?:
+                    guard let i = annotations.firstIndex(where: { $0.id == id }) else { return }
+                    annotations[i].points[end == 0 ? 0 : annotations[i].points.count - 1] = p
+                case .draw?, nil:
+                    guard tool.drawsOnDrag else { return }
+                    if current == nil {
+                        current = Annotation(tool: tool, color: color, lineWidth: lineWidth,
+                                             points: [norm(v.startLocation, size), p])
+                    } else if tool == .pen {
+                        current?.points.append(p)
+                    } else {
+                        current?.points[1] = p
+                    }
                 }
             }
             .onEnded { _ in
-                if tool == .select {
-                    dragStartNorm = nil; dragTargetID = nil; resizeCorner = nil; return
-                }
+                defer { drag = nil; dragStartNorm = nil; current = nil }
                 // Bỏ nét quá ngắn (lỡ kéo nhẹ) → hết "chấm rác". Pen luôn giữ.
-                if let c = current, c.tool == .pen || Self.isBigEnough(c) {
-                    annotations.append(c)
-                    redoStack.removeAll(); clearedBackup = nil   // vẽ nét mới → bỏ lịch sử redo/khôi phục
-                }
-                current = nil
+                guard case .draw? = drag, let c = current, c.tool == .pen || Self.isBigEnough(c) else { return }
+                annotations.append(c)
+                redoStack.removeAll(); clearedBackup = nil   // vẽ nét mới → bỏ lịch sử redo/khôi phục
+                selectedID = c.id     // chọn sẵn nét vừa vẽ: lỡ tay thì ⌫ là xoá
             }
     }
 
@@ -1246,15 +1325,28 @@ struct EditorView: View {
         SpatialTapGesture()
             .onEnded { v in
                 let p = norm(v.location, size)
-                // Select: bấm trúng layer thì chọn, bấm chỗ trống thì bỏ chọn.
-                if tool == .select { selectedID = hitTest(p); return }
+                // Select: bấm trúng khung layer là chọn. Tool khác: phải trúng nét
+                // (bấm vào chữ bằng tool Text thì sửa chữ đó). Chỗ trống: bỏ chọn.
+                if tool == .select { selectedID = hitTest(v.location, in: size, loose: true); return }
+                if let hit = hitTest(v.location, in: size, loose: false) {
+                    if tool == .text, annotations.first(where: { $0.id == hit })?.tool == .text {
+                        selectedID = nil
+                        editingID = hit
+                        textFocused = true
+                    } else {
+                        selectedID = hit
+                    }
+                    return
+                }
+                selectedID = nil
                 guard tool.placesOnTap else { return }
                 switch tool {
                 case .counter:
-                    annotations.append(Annotation(tool: .counter, color: color,
-                                                  lineWidth: lineWidth, points: [p],
-                                                  number: nextCounter))
+                    let a = Annotation(tool: .counter, color: color, lineWidth: lineWidth,
+                                       points: [p], number: nextCounter)
+                    annotations.append(a)
                     redoStack.removeAll(); clearedBackup = nil
+                    selectedID = a.id
                 case .text:
                     let a = Annotation(tool: .text, color: color, lineWidth: lineWidth, points: [p])
                     annotations.append(a)
