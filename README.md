@@ -40,6 +40,9 @@ brew trust aislopware/tap                    # Homebrew 6+ gates third-party tap
 brew install --cask aislopware/tap/slopshot
 ```
 
+`brew trust` exists from Homebrew 6 on; older versions print "Unknown command" and install
+fine without it. Later, `brew upgrade` swaps in the new version and SlopShot reopens itself.
+
 Universal (Apple Silicon + Intel), macOS 15+. The DMG is signed with a Developer ID and
 notarized by Apple, and the ticket is stapled to the `.app` itself — so the first launch
 works offline, with no right-click-Open dance. Or grab the DMG from
