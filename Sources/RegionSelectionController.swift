@@ -833,7 +833,7 @@ final class RegionSelectionController {
     /// Lớp phủ trên một màn hình.
     private final class Pane {
         let screen: NSScreen
-        let frozen: CGImage?
+        var frozen: CGImage?
         let window: OverlayPanel
         let model: SelectionModel
         let view: SelectionEventView
@@ -847,6 +847,11 @@ final class RegionSelectionController {
 
     private var panes: [Pane] = []
     private var escMonitor: Any?
+    /// ⎋ khi bàn phím lỡ nằm ở app khác (vuốt desktop giữa chừng…) — lưới an
+    /// toàn để không bao giờ kẹt dưới lớp phủ. Cần quyền Accessibility; thiếu
+    /// thì monitor im lặng, không hỏng gì.
+    private var globalEscMonitor: Any?
+    private var spaceObserver: NSObjectProtocol?
     private var cancelCurrent: (() -> Void)?
 
     /// Đóng lớp phủ đang mở (nếu có), coi như huỷ.
@@ -860,7 +865,21 @@ final class RegionSelectionController {
         for other in panes where other !== pane { OverlayChrome.close(other.window, fade: false) }
         panes = [pane]
         pane.view.removeFromSuperview()
+        if let globalEscMonitor { NSEvent.removeMonitor(globalEscMonitor) }
+        globalEscMonitor = nil
         cancelCurrent = { [weak self] in self?.cleanup(fade: true) }
+        // Đang vẽ mà vuốt sang desktop khác: editor (cùng nét vẽ) ở lại desktop
+        // cũ, quay về là nhận phím lại ngay.
+        observeSpaceChange { [weak pane] in
+            if let win = pane?.window, win.isOnActiveSpace { win.makeKey() }
+        }
+    }
+
+    private func observeSpaceChange(_ action: @escaping @MainActor () -> Void) {
+        if let spaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(spaceObserver) }
+        spaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
+        ) { _ in MainActor.assumeIsolated { action() } }
     }
 
     /// Đắp editor lên vùng vừa chọn (sau `begin(editInline: true)`). completion
@@ -894,6 +913,7 @@ final class RegionSelectionController {
                tool: String = "Capture Area", toolIcon: String = "camera.viewfinder",
                confirmTitle: String = "Capture", confirmIcon: String = "camera.fill",
                editInline: Bool = false,
+               refreeze: (@MainActor () async -> [(screen: NSScreen, frozen: CGImage?)])? = nil,
                completion: @escaping (RegionSelection?) -> Void) {
         // Phiên cũ còn mở (phím tắt bấm dồn) → huỷ nó trước, không để lại một
         // lớp phủ mồ côi che màn hình mà không ai đóng.
@@ -921,8 +941,7 @@ final class RegionSelectionController {
         let mouse = NSEvent.mouseLocation
         panes = displays.map { d in
             makePane(on: d.screen, frozen: d.frozen, tool: tool, toolIcon: toolIcon,
-                     confirmTitle: confirmTitle, confirmIcon: confirmIcon,
-                     skipAdjust: editInline && d.frozen != nil,
+                     confirmTitle: confirmTitle, confirmIcon: confirmIcon, editInline: editInline,
                      hasPointer: NSMouseInRect(mouse, d.screen.frame, false))
         }
         for pane in panes {
@@ -946,9 +965,40 @@ final class RegionSelectionController {
             MainActor.assumeIsolated { finishOnce(nil, nil) }
             return nil
         }
+        globalEscMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.keyCode == 53 else { return }
+            MainActor.assumeIsolated { self?.cancelCurrent?() }
+        }
+        // Vuốt sang desktop khác lúc đang chọn: lớp phủ trượt đi cùng desktop
+        // cũ (không ghim trên mọi desktop), rồi đóng băng desktop mới và hiện lại
+        // ở đó — chọn tiếp luôn trên desktop vừa vuốt tới.
+        observeSpaceChange { [weak self] in self?.followSpace(refreeze, editInline: editInline) }
 
         for pane in panes { present(pane) }
         if let active = panes.first(where: { $0.model.pointerInside }) ?? panes.first { focus(active) }
+    }
+
+    private func followSpace(_ refreeze: (@MainActor () async -> [(screen: NSScreen, frozen: CGImage?)])?,
+                             editInline: Bool) {
+        let session = panes
+        Task { [weak self] in
+            // Đợi hiệu ứng vuốt dừng hẳn, không thì ảnh dính khung hình đang trượt.
+            try? await Task.sleep(for: .milliseconds(150))
+            let shots = await refreeze?() ?? []
+            // Trong lúc chụp, phiên có thể đã xong/huỷ, hoặc lại vuốt tiếp (lần
+            // sau lo) — chỉ áp ảnh lên đúng phiên này.
+            guard let self, !session.isEmpty, self.panes.elementsEqual(session, by: ===) else { return }
+            let mouse = NSEvent.mouseLocation
+            for pane in session {
+                let shot = shots.first { $0.screen.displayID == pane.screen.displayID }
+                pane.view.reset()
+                load(shot?.frozen ?? pane.frozen, into: pane, editInline: editInline,
+                     hasPointer: NSMouseInRect(mouse, pane.screen.frame, false))
+                pane.model.interacted = false
+                present(pane)              // ra trước = chuyển sang desktop đang đứng
+            }
+            if let active = session.first(where: { $0.model.pointerInside }) ?? session.first { focus(active) }
+        }
     }
 
     /// Bàn phím đi theo con trỏ: Space, ⇧, F, ↩ phải tới màn đang chọn. Đang
@@ -963,14 +1013,9 @@ final class RegionSelectionController {
 
     private func makePane(on screen: NSScreen, frozen: CGImage?, tool: String, toolIcon: String,
                           confirmTitle: String, confirmIcon: String,
-                          skipAdjust: Bool, hasPointer: Bool) -> Pane {
+                          editInline: Bool, hasPointer: Bool) -> Pane {
         let size = screen.frame.size
         let model = SelectionModel()
-        // Tỉ lệ point→pixel lấy từ chính ảnh đóng băng (khớp với ảnh sẽ cắt ra),
-        // không có ảnh thì mới dùng backingScaleFactor.
-        model.scaleFactor = frozen.map { CGFloat($0.width) / max(size.width, 1) }
-            ?? screen.backingScaleFactor
-        model.frozen = frozen
         model.snapEnabled = AppSettings.shared.snapToEdges
         model.confirmTitle = confirmTitle
         model.toolTitle = tool
@@ -979,27 +1024,15 @@ final class RegionSelectionController {
         model.hintText = model.snapEnabled
             ? "Drag to capture · click a highlighted area · ⌥ free · esc"
             : "Drag to capture · esc to cancel"
-        model.skipAdjust = skipAdjust
-        model.pointerInside = hasPointer
 
         let view = SelectionEventView(frame: NSRect(origin: .zero, size: size), model: model)
         view.autoresizingMask = [.width, .height]
-        // Lấy danh sách cửa sổ TRƯỚC khi overlay hiện lên (khỏi dính chính mình).
-        if model.snapEnabled {
-            view.windows = WindowSnapper.snapshot(on: screen)
-            // Chuột đang ở đâu → khoanh sẵn ngay chỗ đó (mouseMoved chưa bắn lần nào).
-            if hasPointer {
-                let m = NSEvent.mouseLocation
-                view.primeCursor(NSPoint(x: m.x - screen.frame.minX, y: screen.frame.maxY - m.y))
-            }
-        }
 
         // Nền = ảnh đóng băng, dán thẳng vào layer (GPU lo phần vẽ lại).
         let backdrop = FrozenBackdropView(frame: NSRect(origin: .zero, size: size))
         backdrop.wantsLayer = true
         backdrop.layer?.contentsGravity = .resize
         backdrop.layer?.contentsScale = screen.backingScaleFactor
-        backdrop.layer?.contents = frozen
 
         let chrome = PassthroughHostingView(rootView: SelectionOverlay(model: model))
         chrome.frame = NSRect(origin: .zero, size: size)
@@ -1019,8 +1052,43 @@ final class RegionSelectionController {
         win.animationBehavior = .none     // hiện tức thì: ảnh đóng băng phải trùng khít màn hình
         win.hidesOnDeactivate = false
         win.acceptsMouseMovedEvents = true
-        win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        // Thuộc về desktop đang đứng, KHÔNG ghim trên mọi desktop: vuốt sang
+        // desktop khác thì lớp phủ trượt đi theo desktop cũ như cửa sổ thường,
+        // ra trước lần nữa (followSpace) là chuyển sang desktop mới.
+        win.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary, .stationary]
         win.contentView = backdrop
+
+        let pane = Pane(screen: screen, frozen: frozen, window: win, model: model, view: view)
+        load(frozen, into: pane, editInline: editInline, hasPointer: hasPointer)
+        return pane
+    }
+
+    /// Đặt ảnh đóng băng (lúc mở, hoặc lúc vừa vuốt sang desktop khác) cùng mọi
+    /// thứ suy ra từ nó: tỉ lệ pixel, kính lúp, dữ liệu bắt dính.
+    private func load(_ frozen: CGImage?, into pane: Pane, editInline: Bool, hasPointer: Bool) {
+        let screen = pane.screen, model = pane.model, view = pane.view
+        let size = screen.frame.size
+        pane.frozen = frozen
+        pane.window.contentView?.layer?.contents = frozen
+        // Tỉ lệ point→pixel lấy từ chính ảnh đóng băng (khớp với ảnh sẽ cắt ra),
+        // không có ảnh thì mới dùng backingScaleFactor.
+        model.scaleFactor = frozen.map { CGFloat($0.width) / max(size.width, 1) }
+            ?? screen.backingScaleFactor
+        model.frozen = frozen
+        // Vẽ ngay trên vùng chọn cần ảnh đóng băng làm nền.
+        model.skipAdjust = editInline && frozen != nil
+        model.pointerInside = hasPointer
+
+        view.snap = nil
+        // Lấy danh sách cửa sổ TRƯỚC khi overlay hiện lên (khỏi dính chính mình).
+        if model.snapEnabled {
+            view.windows = WindowSnapper.snapshot(on: screen)
+            // Chuột đang ở đâu → khoanh sẵn ngay chỗ đó (mouseMoved chưa bắn lần nào).
+            if hasPointer {
+                let m = NSEvent.mouseLocation
+                view.primeCursor(NSPoint(x: m.x - screen.frame.minX, y: screen.frame.maxY - m.y))
+            }
+        }
 
         // Phân tích biên ảnh ở luồng nền (~20-40ms). Trong lúc chờ, snap vẫn
         // chạy được bằng hình học cửa sổ.
@@ -1030,10 +1098,10 @@ final class RegionSelectionController {
                 let engine = await Task.detached(priority: .userInitiated) {
                     SnapEngine.build(from: frozen, scale: scale)
                 }.value
-                view?.snap = engine
+                // Ảnh đã đổi (vuốt desktop) trong lúc dựng → bỏ kết quả cũ.
+                if pane.frozen === frozen { view?.snap = engine }
             }
         }
-        return Pane(screen: screen, frozen: frozen, window: win, model: model, view: view)
     }
 
     private func present(_ pane: Pane) {
@@ -1058,6 +1126,10 @@ final class RegionSelectionController {
     private func cleanup(fade: Bool = false) {
         if let escMonitor { NSEvent.removeMonitor(escMonitor) }
         escMonitor = nil
+        if let globalEscMonitor { NSEvent.removeMonitor(globalEscMonitor) }
+        globalEscMonitor = nil
+        if let spaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(spaceObserver) }
+        spaceObserver = nil
         cancelCurrent = nil
         for pane in panes { OverlayChrome.close(pane.window, fade: fade) }
         panes = []

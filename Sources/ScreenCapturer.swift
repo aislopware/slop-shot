@@ -753,6 +753,18 @@ final class ScreenCapturer: ObservableObject {
     private func selectArea(tool: String = "Capture Area", toolIcon: String = "camera.viewfinder",
                             confirmTitle: String = "Capture", confirmIcon: String = "camera.fill",
                             editInline: Bool = false) async -> RegionSelection? {
+        let displays = await freezeScreens()
+        return await withCheckedContinuation { cont in
+            selection.begin(on: displays, tool: tool, toolIcon: toolIcon,
+                            confirmTitle: confirmTitle, confirmIcon: confirmIcon,
+                            editInline: editInline,
+                            refreeze: { [weak self] in await self?.freezeScreens() ?? [] }) {
+                cont.resume(returning: $0)
+            }
+        }
+    }
+
+    private func freezeScreens() async -> [(screen: NSScreen, frozen: CGImage?)] {
         let screens = NSScreen.screens
         var frozen = [CGImage?](repeating: nil, count: screens.count)
         await withTaskGroup(of: (Int, CGImage?).self) { group in
@@ -761,12 +773,7 @@ final class ScreenCapturer: ObservableObject {
             }
             for await (i, image) in group { frozen[i] = image }
         }
-        return await withCheckedContinuation { cont in
-            selection.begin(on: Array(zip(screens, frozen)).map { (screen: $0, frozen: $1) },
-                            tool: tool, toolIcon: toolIcon,
-                            confirmTitle: confirmTitle, confirmIcon: confirmIcon,
-                            editInline: editInline) { cont.resume(returning: $0) }
-        }
+        return zip(screens, frozen).map { (screen: $0, frozen: $1) }
     }
 
     private func screenUnderCursor() -> NSScreen {
