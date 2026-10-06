@@ -49,6 +49,25 @@ works offline, with no right-click-Open dance. Or grab the DMG from
 [Releases](https://github.com/aislopware/slop-shot/releases) and check it against the
 `SHA256SUMS` attached to the same release.
 
+### Linux (Ubuntu 24.04+, amd64 and arm64)
+
+Download `slopshot_<version>_amd64.deb` (or `_arm64.deb`) from
+[Releases](https://github.com/aislopware/slop-shot/releases) and install it with apt, which
+pulls in the dependencies:
+
+```bash
+sudo apt install ./slopshot_*_amd64.deb
+```
+
+A separate app in Rust + [GPUI](https://www.gpui.rs) (`linux/`) with the same features —
+capture, recording, scrolling capture, OCR, history, the annotation editor with stickers and
+GIF export, a tray icon and the same settings — except translation, which is macOS-only for
+now. Run `slopshot` once
+(or enable *Launch at login* in its Settings): on GNOME it registers `Ctrl+Alt+1` / `2` / `5`
+as system shortcuts, since GNOME has no portal for global hotkeys yet. The first capture
+shows GNOME's "Allow SlopShot to take screenshots?" prompt; pick **Allow** (Enter selects
+Deny). The tray icon needs the AppIndicator extension, which Ubuntu ships enabled.
+
 ## Tech stack
 
 Swift · SwiftUI · AppKit · ScreenCaptureKit · AVFoundation / AVKit · Vision (OCR) · CoreGraphics/CoreText · [XcodeGen](https://github.com/yonaskolb/XcodeGen)

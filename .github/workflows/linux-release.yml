@@ -1,0 +1,130 @@
+# Release bản Linux: cùng tag v* với bản macOS → .deb amd64 + arm64 → đính kèm vào cùng
+# GitHub Release, cạnh DMG. Không cần secret nào ngoài github.token.
+name: Linux release
+
+run-name: "Linux release ${{ inputs.version || github.ref_name }}${{ inputs.dry-run && ' (dry run)' || '' }}"
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version cần build, không có chữ v (vd 0.1.0)
+        type: string
+        required: true
+      dry-run:
+        description: "Dry run — build + E2E + thử cài .deb, không đính kèm vào release"
+        type: boolean
+        default: true
+
+concurrency: linux-release
+
+permissions: {}
+
+jobs:
+  # ── build + E2E + .deb, mỗi kiến trúc trên runner gốc của nó ───────────────────────────────
+  deb:
+    name: .deb ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    defaults:
+      run:
+        working-directory: linux
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          version="${{ inputs.version }}"
+          version="${version:-${GITHUB_REF_NAME#v}}"
+          cargo_version="$(awk '/^version = / {gsub(/version = |"/, ""); print; exit}' Cargo.toml)"
+          # bump-version.sh ghi version vào Cargo.toml cùng lúc với bản macOS; lệch nghĩa là tag
+          # này được cắt không qua `make release`.
+          [ "${cargo_version}" = "${version}" ] ||
+            { echo "::error::linux/Cargo.toml là ${cargo_version}, tag là ${version}"; exit 1; }
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Cài gói build + GNOME headless
+        run: ci/provision.sh
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: linux
+
+      # E2E chạy trên chính binary release sẽ vào .deb, trong một phiên GNOME Shell headless.
+      - name: E2E
+        run: CARGO_PROFILE=release tests/e2e/run.sh
+
+      - name: Build .deb
+        run: cargo deb --locked --no-build
+
+      # Đúng lệnh README đưa cho người dùng: apt cài file .deb và kéo theo dependency.
+      - name: Thử cài .deb
+        run: |
+          set -euo pipefail
+          DEBIAN_FRONTEND=noninteractive tests/e2e/install.sh "$(ls target/debian/slopshot_*_${{ matrix.arch }}.deb)"
+
+      - name: Upload evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-evidence-${{ matrix.arch }}
+          path: linux/.e2e-evidence
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: deb-${{ matrix.arch }}
+          path: linux/target/debian/*.deb
+          retention-days: 7
+
+  # ── đính kèm vào GitHub Release ───────────────────────────────────────────────────────────
+  publish:
+    name: GitHub Release
+    needs: deb
+    if: ${{ !inputs.dry-run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      # Checkout vì CHANGELOG.md, khi job này tạo release trước bản macOS. Phải đứng trước
+      # download-artifact — checkout dọn sạch thư mục mà artifact rơi vào.
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: deb-*
+          merge-multiple: true
+          path: dist
+
+      - name: Tạo hoặc cập nhật release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.deb.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Tên riêng: release.yml đã đính SHA256SUMS của DMG và ghi đè nó bằng --clobber.
+          (cd dist && sha256sum ./*.deb | sed 's| \./| |' > SHA256SUMS-linux)
+          cat dist/SHA256SUMS-linux
+
+          # Hai workflow cùng tag chạy song song; ai xong trước thì tạo release, người sau đính
+          # thêm file. `create` thua cuộc đua thì release đã có, nên rơi xuống `upload`.
+          notes="${RUNNER_TEMP}/release-notes.md"
+          scripts/changelog-section.sh "${VERSION}" > "${notes}"
+          gh release create "v${VERSION}" --repo "${GITHUB_REPOSITORY}" \
+            --verify-tag --title "SlopShot ${VERSION}" --notes-file "${notes}" dist/* 2> /dev/null ||
+            gh release upload "v${VERSION}" --repo "${GITHUB_REPOSITORY}" --clobber dist/*

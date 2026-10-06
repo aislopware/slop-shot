@@ -1,0 +1,28 @@
+[Desktop Entry]
+Type=Application
+Name=SlopShot
+GenericName=Screenshot Tool
+Comment=Capture, annotate and copy screenshots
+Exec=slopshot
+Icon=com.thanglb.slopshot
+Terminal=false
+Categories=Utility;
+Keywords=screenshot;capture;annotate;color;picker;
+StartupNotify=false
+Actions=area;full;color;settings;
+
+[Desktop Action area]
+Name=Capture Area
+Exec=slopshot area
+
+[Desktop Action full]
+Name=Capture Fullscreen
+Exec=slopshot full
+
+[Desktop Action color]
+Name=Pick Color
+Exec=slopshot color
+
+[Desktop Action settings]
+Name=Settings
+Exec=slopshot settings

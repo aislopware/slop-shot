@@ -1,0 +1,82 @@
+[package]
+name = "slopshot"
+version = "0.9.1"
+edition = "2024"
+description = "Screenshot and annotation tool for Linux (GNOME/Wayland and X11)"
+license = "MIT"
+homepage = "https://github.com/aislopware/slop-shot"
+repository = "https://github.com/aislopware/slop-shot"
+authors = ["thanglb <thang.le@jmango360.com>"]
+
+[dependencies]
+# gpui-component pins the gpui-pre snapshot of Zed; gpui itself must match it exactly.
+gpui = { package = "gpui-pre", version = "=0.3.8" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.8", features = ["wayland", "x11"] }
+gpui-component = { git = "https://github.com/aislopware/gpui-kit.git" }
+gpui-kit-assets = { git = "https://github.com/aislopware/gpui-kit.git" }
+ashpd = { version = "0.13", default-features = false, features = ["async-io", "screenshot", "open_uri", "screencast", "remote_desktop"] }
+ksni = { version = "0.3", default-features = false, features = ["async-io", "blocking"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+ureq = "3"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+url = "2"
+anyhow = "1"
+async-channel = "2"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff", "gif", "bmp", "webp"] }
+fancy-regex = "0.14"
+gif = "0.14"
+lyon = "1"
+tiny-skia = "0.11"
+ab_glyph = "0.2"
+fontdb = "0.23"
+log = "0.4"
+libc = "0.2"
+x11rb = { version = "0.13", features = ["shape"] }
+raw-window-handle = "0.6"
+gstreamer = "0.25"
+gstreamer-app = "0.25"
+gstreamer-pbutils = "0.25"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+rqrr = "0.11"
+unicode-normalization = "0.1"
+env_logger = { version = "0.11", default-features = false, features = ["humantime"] }
+
+[profile.release]
+lto = "thin"
+strip = true
+
+[package.metadata.deb]
+name = "slopshot"
+maintainer = "thanglb <thang.le@jmango360.com>"
+section = "graphics"
+priority = "optional"
+extended-description = """\
+SlopShot lives in the tray and captures an area, the whole screen or a pixel's colour \
+through xdg-desktop-portal, copies it, saves it and opens it in an annotation editor."""
+depends = "$auto, libvulkan1 | libegl1, xdg-desktop-portal, xdg-desktop-portal-gnome | xdg-desktop-portal-kde | xdg-desktop-portal-wlr | xdg-desktop-portal-gtk, pipewire, gstreamer1.0-pipewire, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-ugly, gstreamer1.0-libav, gstreamer1.0-pulseaudio, tesseract-ocr, tesseract-ocr-eng"
+# The tray icon needs a StatusNotifier host; stock GNOME only has one through this extension.
+recommends = "gnome-shell-extension-appindicator"
+assets = [
+    ["target/release/slopshot", "usr/bin/", "755"],
+    ["data/com.thanglb.slopshot.desktop", "usr/share/applications/", "644"],
+    ["data/com.thanglb.slopshot.metainfo.xml", "usr/share/metainfo/", "644"],
+    ["data/icons/hicolor/16x16/apps/com.thanglb.slopshot.png", "usr/share/icons/hicolor/16x16/apps/", "644"],
+    ["data/icons/hicolor/32x32/apps/com.thanglb.slopshot.png", "usr/share/icons/hicolor/32x32/apps/", "644"],
+    ["data/icons/hicolor/64x64/apps/com.thanglb.slopshot.png", "usr/share/icons/hicolor/64x64/apps/", "644"],
+    ["data/icons/hicolor/128x128/apps/com.thanglb.slopshot.png", "usr/share/icons/hicolor/128x128/apps/", "644"],
+    ["data/icons/hicolor/256x256/apps/com.thanglb.slopshot.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
+    ["data/icons/hicolor/512x512/apps/com.thanglb.slopshot.png", "usr/share/icons/hicolor/512x512/apps/", "644"],
+]
+
+[patch.crates-io]
+gpui-pre = { git = "https://github.com/aislopware/gpui-fast.git", rev = "877651fa3665806217c94107356d3c7a34299ebe" }
+gpui-pre-platform = { git = "https://github.com/aislopware/gpui-fast.git", rev = "877651fa3665806217c94107356d3c7a34299ebe" }
+gpui-pre-macros = { git = "https://github.com/aislopware/gpui-fast.git", rev = "877651fa3665806217c94107356d3c7a34299ebe" }
+gpui-pre-sum-tree = { git = "https://github.com/aislopware/gpui-fast.git", rev = "877651fa3665806217c94107356d3c7a34299ebe" }
+
+[patch."https://github.com/aislopware/gpui-fast.git"]
+# Wayland/X11 image clipboard, per-output fullscreen, exact X11 popups; see vendor/gpui_linux/PATCHES.md.
+gpui_linux = { path = "vendor/gpui_linux" }
