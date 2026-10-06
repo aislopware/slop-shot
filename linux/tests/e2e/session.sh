@@ -15,8 +15,8 @@ if [ -z "${SLOPSHOT_E2E_INNER:-}" ]; then
   export HOME="$run_dir/home"
   unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME XDG_STATE_HOME
   mkdir -p "$HOME"
-  # xdg-document-portal leaves a FUSE mount in the runtime dir.
-  trap 'fusermount3 -uz "$run_dir/doc" 2>/dev/null; rm -rf "$run_dir"' EXIT
+  # xdg-document-portal leaves a FUSE mount in the runtime dir, or none if it never started.
+  trap 'fusermount3 -uz "$run_dir/doc" 2> /dev/null || true; rm -rf "$run_dir"' EXIT
   dbus-run-session -- "$0" "$@"
   exit
 fi
@@ -47,13 +47,15 @@ for _ in $(seq 50); do
 done
 gnome-shell --headless --wayland --no-x11 --virtual-monitor "$monitor" > "$log" 2>&1 &
 shell_pid=$!
+# Any of these may have exited already, and under `set -e` a failed kill here would turn the
+# test run's exit status into 1.
 stop_session() {
-  kill "$shell_pid" "${pw_pids[@]}" 2> /dev/null
+  kill "$shell_pid" "${pw_pids[@]}" 2> /dev/null || true
   for _ in $(seq 30); do
     kill -0 "$shell_pid" 2> /dev/null || break
     sleep 0.1
   done
-  kill -9 "$shell_pid" 2> /dev/null
+  kill -9 "$shell_pid" 2> /dev/null || true
   wait "$shell_pid" 2> /dev/null || true
 }
 trap stop_session EXIT
