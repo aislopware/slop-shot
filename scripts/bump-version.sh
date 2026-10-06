@@ -12,6 +12,8 @@
 #                                                        MARKETING_VERSION KHÔNG chạm tới nó
 #   Support/Info.plist  CFBundleShortVersionString       file XcodeGen sinh ra nhưng vẫn commit,
 #                                                        nên nó là cái lệch âm thầm khi quên `make gen`
+#   linux/Cargo.toml  version                            bản Linux, cùng version với bản macOS
+#   linux/Cargo.lock  version của package slopshot       CI build `--locked`: lock cũ là fail
 #
 # package-release.sh có đóng lại CFBundleShortVersionString bằng PlistBuddy trước khi ký, nên một
 # bản release vẫn đúng version dù cây source lệch — đó chính là lý do phải có --check: không có nó,
@@ -21,6 +23,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT_YML="${REPO_ROOT}/project.yml"
 INFO_PLIST="${REPO_ROOT}/Support/Info.plist"
+CARGO_TOML="${REPO_ROOT}/linux/Cargo.toml"
+CARGO_LOCK="${REPO_ROOT}/linux/Cargo.lock"
 
 CHECK_ONLY=0
 if [[ "${1:-}" == "--check" ]]; then
@@ -37,12 +41,20 @@ VERSION="${1:-}"
   echo "cảnh báo: '${VERSION}' không phải dạng x.y.z" >&2
 
 read_project_yml() { sed -nE "s/^[[:space:]]*${1}: \"?([^\"]*)\"?$/\1/p" "${PROJECT_YML}"; }
+# Dòng `version =` đầu tiên của Cargo.toml là của [package]; trong Cargo.lock là dòng ngay
+# sau `name = "slopshot"`.
+read_cargo_toml() { awk '/^version = / {gsub(/version = |"/, ""); print; exit}' "${CARGO_TOML}"; }
+read_cargo_lock() { awk '/^name = "slopshot"$/ {getline; gsub(/version = |"/, ""); print; exit}' "${CARGO_LOCK}"; }
 read_plist() { /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "${INFO_PLIST}"; }
 
 if [[ "${CHECK_ONLY}" == "0" ]]; then
   # sed trên macOS: -i cần một hậu tố, '' là "sửa tại chỗ, không backup".
   sed -i '' -E "s/^([[:space:]]*MARKETING_VERSION: ).*$/\1\"${VERSION}\"/" "${PROJECT_YML}"
   sed -i '' -E "s/^([[:space:]]*CFBundleShortVersionString: ).*$/\1\"${VERSION}\"/" "${PROJECT_YML}"
+
+  # Range `1,/re/` thay đúng lần khớp đầu tiên, tức [package] chứ không phải dependency nào.
+  sed -i '' -E "1,/^version = /s/^version = \".*\"$/version = \"${VERSION}\"/" "${CARGO_TOML}"
+  sed -i '' -E "/^name = \"slopshot\"$/{n;s/^version = \".*\"$/version = \"${VERSION}\"/;}" "${CARGO_LOCK}"
 
   # Support/Info.plist là output của XcodeGen. Sinh lại từ project.yml (thay vì sửa tay) để nó
   # giống hệt cái `make gen` sẽ tạo ra — sửa tay là lần sau `make gen` lại ra diff không đâu.
@@ -70,6 +82,8 @@ check() {
 check "project.yml MARKETING_VERSION" "$(read_project_yml MARKETING_VERSION)"
 check "project.yml CFBundleShortVersionString" "$(read_project_yml CFBundleShortVersionString)"
 check "Support/Info.plist CFBundleShortVersionString" "$(read_plist)"
+check "linux/Cargo.toml version" "$(read_cargo_toml)"
+check "linux/Cargo.lock slopshot" "$(read_cargo_lock)"
 
 if [[ "${fail}" == "1" ]]; then
   if [[ "${CHECK_ONLY}" == "1" ]]; then

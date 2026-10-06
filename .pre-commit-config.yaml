@@ -22,10 +22,12 @@ repos:
     hooks:
       - id: trailing-whitespace
         stages: [pre-commit]
-        # .md để yên: hai dấu cách cuối dòng trong Markdown là một cú xuống dòng.
-        exclude: '\.md$'
+        # .md để yên: hai dấu cách cuối dòng trong Markdown là một cú xuống dòng. linux/vendor
+        # giữ nguyên byte của upstream, và dòng context trống trong .patch có một dấu cách.
+        exclude: '\.md$|^linux/vendor/'
       - id: end-of-file-fixer
         stages: [pre-commit]
+        exclude: '^linux/vendor/'
       - id: check-yaml
         stages: [pre-commit]
       - id: check-toml
@@ -35,6 +37,7 @@ repos:
       - id: mixed-line-ending
         stages: [pre-commit]
         args: [--fix=lf]
+        exclude: '^linux/vendor/'
       - id: check-added-large-files
         stages: [pre-commit]
         # 1024 vừa đủ cho icon 1024px (274 KB) mà vẫn bắt được một cái ảnh chụp màn hình hay

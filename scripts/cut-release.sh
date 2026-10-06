@@ -88,11 +88,11 @@ if [[ "${DRY_RUN}" == "1" ]]; then
   exit 0
 fi
 
-step "Ghi version vào cả ba chỗ"
+step "Ghi version vào mọi chỗ giữ nó"
 scripts/bump-version.sh "${VERSION}"
 
 step "Commit và tag"
-git add CHANGELOG.md project.yml Support/Info.plist
+git add CHANGELOG.md project.yml Support/Info.plist linux/Cargo.toml linux/Cargo.lock
 
 # `chore(release)` là tiêu đề DUY NHẤT mà `cliff.toml` skip, nên commit release không bao giờ
 # xuất hiện trong ghi chú của release sau nó.

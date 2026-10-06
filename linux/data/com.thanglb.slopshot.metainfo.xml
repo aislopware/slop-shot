@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.thanglb.slopshot</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>SlopShot</name>
+  <summary>Capture, annotate and copy screenshots</summary>
+  <description>
+    <p>
+      SlopShot lives in the tray and captures an area, the whole screen or a single pixel's
+      colour from a frozen copy of the screen. Captures go to the clipboard, are saved to a
+      folder and open in an editor with shapes, arrows, text, numbered steps, highlighter,
+      blur and censor boxes.
+    </p>
+  </description>
+  <launchable type="desktop-id">com.thanglb.slopshot.desktop</launchable>
+  <url type="homepage">https://github.com/aislopware/slop-shot</url>
+  <developer id="com.thanglb">
+    <name>thanglb</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-10-06"/>
+  </releases>
+</component>

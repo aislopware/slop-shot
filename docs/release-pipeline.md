@@ -210,6 +210,33 @@ cảnh báo ngay đầu file cask.
 Cask **không** khai `depends_on arch:` vì DMG là universal. Nó khai
 `depends_on macos: ">= :sequoia"` khớp `LSMinimumSystemVersion 15.0` trong `Support/Info.plist`.
 
+## 5b. Linux: .deb trên GitHub Release
+
+Cùng tag `v*` chạy thêm `.github/workflows/linux-release.yml`. Version Linux là version
+chung: `bump-version.sh` ghi cả `linux/Cargo.toml` và `linux/Cargo.lock`, và job `deb` fail
+ngay nếu Cargo.toml lệch tag.
+
+```
+  deb (amd64 trên ubuntu-24.04, arm64 trên ubuntu-24.04-arm)
+     ci/provision.sh ─► E2E trên binary release (GNOME Shell headless)
+                     ─► cargo deb ─► tests/e2e/install.sh (apt install ./file.deb như README)
+  publish
+     SHA256SUMS-linux ─► gh release create --verify-tag, hoặc upload --clobber nếu đã có
+```
+
+- Không có secret nào ngoài `github.token`: không ký, không bucket.
+- Hai workflow cùng tag chạy song song, ai xong trước thì tạo release. Checksum của .deb nằm ở
+  `SHA256SUMS-linux` vì `SHA256SUMS` là của DMG và `release.yml` ghi đè nó.
+- Người dùng không tự lên bản mới: không có apt repo nên `apt upgrade` không thấy SlopShot.
+
+Thử ở máy (Lima VM Ubuntu 24.04, xem `linux/ci/provision.sh`):
+
+```bash
+linux/ci/vm.sh tests/e2e/run.sh                     # E2E app, bằng chứng ở linux/.e2e-evidence/
+linux/ci/vm.sh cargo deb
+linux/ci/vm.sh tests/e2e/install.sh <file.deb>      # apt install ./file.deb, kiểm rồi gỡ
+```
+
 ## 6. Chạy tay khi cần
 
 `workflow_dispatch` nhận `version` và `dry-run`:
@@ -233,6 +260,7 @@ Chạy lại một release đã có (tag lại, retry job) là an toàn: job `pu
 |---|---|
 | `CHANGELOG.md không có mục cho 0.2.0` | tag được push mà không qua `make release`. Chạy `scripts/render-changelog.sh --tag v0.2.0`, commit, tag lại. |
 | `version trong cây source lệch nhau` | ai đó sửa `project.yml` mà quên `make gen`. `scripts/bump-version.sh <version>`. |
+| `linux/Cargo.toml là x, tag là y` | tag cắt không qua `make release`. `scripts/bump-version.sh <version>`, commit, tag lại. |
 | `identity không có trong keychain nào đang mở` | ở máy: chưa cài .p12 Developer ID. Ở CI: `APPLE_CERTIFICATE_*` sai hoặc thiếu trong vault. |
 | `binary thiếu slice x86_64` | có setting đè `ARCHS` trong `project.yml`. |
 | codesign đứng chờ mãi ở CI | thiếu `security set-key-partition-list` — nó đang đợi một hộp thoại UI không ai trả lời. |
