@@ -15,14 +15,18 @@
 # deployment target macOS 15 — máy Intel vẫn chạy được macOS 15, nên không có lý do gì bỏ họ.
 # Cask vì thế không khai `depends_on arch:`.
 #
-# ĐẦU VÀO ký/notarize (biến môi trường — CI kéo từ vault better-update, xem
-# docs/release-pipeline.md; chạy ở máy mình thì dựa vào login keychain là đủ):
+# KÝ + NOTARIZE đi qua better-update CLI: nó tải Developer ID .p12 của JMango từ vault vào một
+# keychain dùng một lần, ký inside-out, notarize bằng ASC key của team trong vault rồi staple.
+# Ở CI nó xác thực bằng BETTER_UPDATE_ROBOT, ở máy mình bằng `better-update login`; project là
+# cái `eas.json` ở gốc repo trỏ tới (xem docs/release-pipeline.md).
+#
+# ĐẦU VÀO (biến môi trường):
 #   SLOPSHOT_VERSION              BẮT BUỘC. Marketing version, không có "v" đằng trước (vd 0.1.0).
 #   SLOPSHOT_BUILD_NUMBER         CFBundleVersion. Mặc định: 1.
-#   SLOPSHOT_SIGN_IDENTITY        Identity cho codesign. Mặc định: Developer ID của WEEBUILD.
-#   SLOPSHOT_NOTARY_PROFILE       Tên profile `notarytool --keychain-profile`. Ưu tiên hơn bộ dưới.
-#   APPLE_ID / APPLE_TEAM_ID / APPLE_APP_SPECIFIC_PASSWORD
-#                                 Thông tin notarytool khi không có keychain profile (đường CI đi).
+#   SLOPSHOT_CERTIFICATE_ID       Credential id của Developer ID Application trong vault.
+#                                 Mặc định: cert của JMANGO VIETNAM (UK58J62H8L).
+#   SLOPSHOT_ASC_KEY_ID           Credential id của ASC key notarize trong vault.
+#                                 Mặc định: key "JMango Vietnam" của cùng team.
 #   SLOPSHOT_SKIP_NOTARIZE=1      Ký + đóng gói nhưng KHÔNG nộp Apple. CHỈ dùng cho dry-run —
 #                                 file ra sẽ KHÔNG qua được Gatekeeper trên máy khác.
 #
@@ -37,7 +41,8 @@ STAGE="${WORK}/stage"
 
 VERSION="${SLOPSHOT_VERSION:?SLOPSHOT_VERSION là bắt buộc (vd 0.1.0, không có chữ v)}"
 BUILD_NUMBER="${SLOPSHOT_BUILD_NUMBER:-1}"
-SIGN_IDENTITY="${SLOPSHOT_SIGN_IDENTITY:-Developer ID Application: WEEBUILD VIET NAM COMPANY LIMITED (AJ4R8GWM7A)}"
+CERTIFICATE_ID="${SLOPSHOT_CERTIFICATE_ID:-e9752244-44cc-4a8a-bfbb-8206b66046bc}"
+ASC_KEY_ID="${SLOPSHOT_ASC_KEY_ID:-6a08f315-e27f-4a77-a467-b6ece092527b}"
 SKIP_NOTARIZE="${SLOPSHOT_SKIP_NOTARIZE:-0}"
 
 APP="SlopShot.app"
@@ -54,7 +59,7 @@ step() { echo "── $* ──"; }
 # ── 1. Preflight ────────────────────────────────────────────────────────────────────────────
 step "Preflight"
 
-for tool in xcodegen xcodebuild codesign hdiutil; do
+for tool in xcodegen xcodebuild better-update; do
   command -v "${tool}" > /dev/null 2>&1 || die "thiếu tool: ${tool}"
 done
 
@@ -64,22 +69,15 @@ done
 # version đều do scripts/bump-version.sh sửa; nếu chúng lệch nhau thì đang cắt release dở dang.
 "${REPO_ROOT}/scripts/bump-version.sh" --check "${VERSION}"
 
-security find-identity -v -p codesigning | grep -qF "${SIGN_IDENTITY}" ||
-  die "identity không có trong keychain nào đang mở: ${SIGN_IDENTITY}"
-
-if [[ "${SKIP_NOTARIZE}" != "1" ]]; then
-  if [[ -z "${SLOPSHOT_NOTARY_PROFILE:-}" ]]; then
-    : "${APPLE_ID:?đặt SLOPSHOT_NOTARY_PROFILE, hoặc APPLE_ID + APPLE_TEAM_ID + APPLE_APP_SPECIFIC_PASSWORD}"
-    : "${APPLE_TEAM_ID:?APPLE_TEAM_ID bắt buộc khi không có notary keychain profile}"
-    : "${APPLE_APP_SPECIFIC_PASSWORD:?APPLE_APP_SPECIFIC_PASSWORD bắt buộc khi không có notary keychain profile}"
-  fi
-fi
+# --non-interactive: CI không có ai trả lời một picker, nên thiếu gì thì phải fail.
+cert=(--non-interactive --certificate-id "${CERTIFICATE_ID}")
+asc_key=(--asc-key-id "${ASC_KEY_ID}")
 
 rm -rf "${WORK}"
 mkdir -p "${DIST}" "${DD}" "${STAGE}"
 
 echo "version=${VERSION} build=${BUILD_NUMBER}"
-echo "identity=${SIGN_IDENTITY}"
+echo "certificate=${CERTIFICATE_ID} asc-key=${ASC_KEY_ID}"
 
 # ── 2. Build (chưa ký) ──────────────────────────────────────────────────────────────────────
 # Build UNSIGNED có chủ đích: version phải đóng vào Info.plist SAU khi build (XcodeGen ghi
@@ -123,69 +121,35 @@ PLIST="${STAGE}/${APP}/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "${PLIST}"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER}" "${PLIST}"
 
-# --options runtime (Hardened Runtime) + --timestamp (secure timestamp) là hai điều kiện
-# notarization; --entitlements mở lại đúng một thứ Hardened Runtime khoá mà app cần: micro.
-codesign --force --sign "${SIGN_IDENTITY}" --options runtime --timestamp \
-  --entitlements "${ENTITLEMENTS}" "${STAGE}/${APP}"
-codesign --verify --strict --deep --verbose=1 "${STAGE}/${APP}"
-
-notarize() {
-  local artifact="${1}"
-  if [[ -n "${SLOPSHOT_NOTARY_PROFILE:-}" ]]; then
-    xcrun notarytool submit "${artifact}" \
-      --keychain-profile "${SLOPSHOT_NOTARY_PROFILE}" --wait
-  else
-    xcrun notarytool submit "${artifact}" \
-      --apple-id "${APPLE_ID}" --team-id "${APPLE_TEAM_ID}" \
-      --password "${APPLE_APP_SPECIFIC_PASSWORD}" --wait
-  fi
-}
+# --entitlements mở lại đúng một thứ Hardened Runtime khoá mà app cần: micro.
+better-update macos sign "${STAGE}/${APP}" "${cert[@]}" --entitlements "${ENTITLEMENTS}"
 
 # ── 4. Notarize + staple APP, TRƯỚC khi nó vào DMG ──────────────────────────────────────────
 # Thứ tự là toàn bộ mẹo ở đây: cask copy SlopShot.app RA KHỎI ảnh đĩa, nên ticket chỉ dán trên
 # DMG không bao giờ tới được app người dùng bấm vào — Gatekeeper phải hỏi Apple qua mạng, và
-# lần mở đầu tiên khi không có mạng là fail. App bên trong DMG là một BẢN COPY, nên staple phải
-# xong trước `cp -R … "${DMG_ROOT}"` ở dưới. Đẩy khối này xuống sau bước tạo DMG thì pipeline
-# vẫn xanh và âm thầm ship app không ticket.
+# lần mở đầu tiên khi không có mạng là fail. `macos package` chỉ notarize cái vỏ ngoài cùng, nên
+# app phải được notarize + staple riêng ở đây, trước khi được copy vào DMG.
 if [[ "${SKIP_NOTARIZE}" == "1" ]]; then
   echo "SLOPSHOT_SKIP_NOTARIZE=1 — app đã ký nhưng CHƯA notarize/staple."
 else
-  step "Notarize ${APP}"
-  APP_ZIP="${WORK}/SlopShot-${VERSION}.zip"
-  # ditto --sequesterRsrc là cách Apple khuyến nghị đóng zip đi notarize: resource fork bị tách
-  # riêng thay vì làm hỏng gói upload.
-  ditto -c -k --keepParent --sequesterRsrc "${STAGE}/${APP}" "${APP_ZIP}"
-  notarize "${APP_ZIP}"
-
-  # Staple bản gốc trong STAGE — đó mới là bản dùng để dựng DMG. Validate luôn thay vì tin exit
-  # code: ticket không dán được thì phải fail ở đây, chứ không ship một app trông ổn cho tới lúc
-  # ai đó mở nó offline.
-  step "Staple ${APP}"
-  xcrun stapler staple "${STAGE}/${APP}"
+  step "Notarize + staple ${APP}"
+  better-update macos notarize "${STAGE}/${APP}" --non-interactive "${asc_key[@]}"
+  # Validate lại thay vì tin exit code: ticket không dán được thì phải fail ở đây, chứ không ship
+  # một app trông ổn cho tới lúc ai đó mở nó offline.
   xcrun stapler validate "${STAGE}/${APP}" ||
     die "không có ticket nào dán được vào ${APP} — DMG sẽ ship app fail ở lần mở đầu tiên offline"
 fi
 
 # ── 5. DMG ──────────────────────────────────────────────────────────────────────────────────
+# HFS+ UDZO có symlink Applications, ký bằng chính Developer ID; DMG cần lượt notarize riêng vì
+# Apple không suy ticket của ảnh đĩa từ ruột nó.
 step "Dựng DMG"
-
-DMG_ROOT="${WORK}/dmg"
-mkdir -p "${DMG_ROOT}"
-cp -R "${STAGE}/${APP}" "${DMG_ROOT}/"
-ln -s /Applications "${DMG_ROOT}/Applications"
-
 rm -f "${DMG}"
-hdiutil create -srcfolder "${DMG_ROOT}" -volname "SlopShot ${VERSION}" \
-  -fs HFS+ -format UDZO -quiet "${DMG}"
-codesign --force --sign "${SIGN_IDENTITY}" --timestamp "${DMG}"
-
 if [[ "${SKIP_NOTARIZE}" == "1" ]]; then
+  better-update macos package "${STAGE}/${APP}" "${cert[@]}" --format dmg --output "${DMG}" --notarize=false
   echo "SLOPSHOT_SKIP_NOTARIZE=1 — DMG đã ký nhưng CHƯA notarize (chỉ hợp lệ cho dry run)."
 else
-  # DMG cần lượt notarize riêng: Apple không suy ra ticket của ảnh đĩa từ ruột nó được.
-  step "Notarize DMG"
-  notarize "${DMG}"
-  xcrun stapler staple "${DMG}"
+  better-update macos package "${STAGE}/${APP}" "${cert[@]}" "${asc_key[@]}" --format dmg --output "${DMG}"
   xcrun stapler validate "${DMG}"
 fi
 
