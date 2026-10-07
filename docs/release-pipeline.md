@@ -109,58 +109,67 @@ trong vài giây thay vì sau một bản build đã ký.
   thay cho mình.
 - **Build unsigned trước, đóng version sau, ký sau cùng.** Sửa plist bên trong một bundle đã
   ký là hỏng chữ ký, mà `CFBundleVersion` phải đợi số build của CI.
-- **Hardened Runtime + secure timestamp** (`--options runtime --timestamp`) là điều kiện
-  notarization. `Support/SlopShot.entitlements` mở lại đúng một thứ Hardened Runtime khoá mà
-  app cần: `com.apple.security.device.audio-input` (mic trong screen recording).
+- **Ký và notarize qua better-update CLI** (`macos sign` / `macos notarize` / `macos package`):
+  nó tải Developer ID `.p12` từ vault vào một keychain dùng một lần, ký inside-out với Hardened
+  Runtime + secure timestamp, notarize bằng ASC key của team trong vault, staple rồi validate.
+  `Support/SlopShot.entitlements` mở lại đúng một thứ Hardened Runtime khoá mà app cần:
+  `com.apple.security.device.audio-input` (mic trong screen recording).
 - **Notarize + staple `.app` TRƯỚC khi nó vào DMG.** Cask copy `SlopShot.app` *ra khỏi* ảnh
   đĩa, nên ticket chỉ dán trên DMG không bao giờ tới được app người dùng bấm vào —
   Gatekeeper phải hỏi Apple qua mạng, và lần mở đầu tiên khi không có mạng là fail. App bên
   trong DMG là một bản copy. Đẩy khối này xuống sau bước tạo DMG thì pipeline vẫn xanh và
   âm thầm ship app không ticket.
-- **DMG cần lượt notarize riêng.** Apple không suy ticket của ảnh đĩa từ ruột nó.
+- **DMG cần lượt notarize riêng.** Apple không suy ticket của ảnh đĩa từ ruột nó, và
+  `macos package` chỉ notarize cái vỏ ngoài cùng — nên app đã được notarize riêng ở bước trước.
 
 Ra `dist/SlopShot-<version>-universal.dmg` và `dist/SHA256SUMS`.
 
-Identity mặc định: `Developer ID Application: WEEBUILD VIET NAM COMPANY LIMITED (AJ4R8GWM7A)`.
+Cert: `Developer ID Application: JMANGO VIETNAM OPERATIONS COMPANY LIMITED (UK58J62H8L)`,
+credential `e9752244-44cc-4a8a-bfbb-8206b66046bc` trong vault (`SLOPSHOT_CERTIFICATE_ID` để đổi).
+Notarize bằng ASC key "JMango Vietnam", credential `6a08f315-e27f-4a77-a467-b6ece092527b`
+(`SLOPSHOT_ASC_KEY_ID` để đổi) — phải chỉ rõ, vì vault có nhiều key và ở `--non-interactive` CLI
+không tự chọn.
+Đổi Team ID so với các bản đến 0.9.1 (WEEBUILD, `AJ4R8GWM7A`) nghĩa là macOS coi đây là app khác
+khi xét quyền: người dùng phải cấp lại Screen Recording một lần sau khi cập nhật.
 
 ### Thử ở máy mình
 
 ```bash
-make package VERSION=0.1.0 SKIP_NOTARIZE=1
+better-update login                                # tài khoản trong org JMango
+make package VERSION=0.1.0 SKIP_NOTARIZE=1         # ký Developer ID đầy đủ, không nộp Apple
+make package VERSION=0.1.0                         # ký + notarize thật
 ```
 
-Vẫn ký Developer ID đầy đủ, chỉ không nộp Apple. File ra **không** qua được Gatekeeper trên
-máy khác — chỉ để chứng minh đường build + ký còn chạy.
-
-Muốn notarize thật ở máy, đăng ký profile một lần rồi trỏ vào nó:
-
-```bash
-xcrun notarytool store-credentials slopshot-notary \
-  --apple-id "…" --team-id AJ4R8GWM7A --password "<app-specific-password>"
-
-SLOPSHOT_NOTARY_PROFILE=slopshot-notary make package VERSION=0.1.0
-```
+Bản `SKIP_NOTARIZE=1` **không** qua được Gatekeeper trên máy khác — chỉ để chứng minh đường
+build + ký còn chạy.
 
 ## 4. Secret
 
 Repo này **public**, và mọi dòng workflow in ra là công khai vĩnh viễn. Hình dạng bắt buộc,
 giữ nguyên:
 
-- **Một step duy nhất** chạm vào vật liệu ký: pull → mask → source → import → build → ký →
-  notarize. Không secret nào vượt ranh giới step, nên không có `$GITHUB_ENV` hay `set -x`
-  của step sau nào làm lộ được.
+- **Vật liệu ký không bao giờ đi qua workflow.** Job package chỉ đưa robot token cho
+  better-update CLI; `.p12`, mật khẩu của nó và ASC key được giải mã bên trong CLI, vào một
+  keychain dùng một lần mà CLI gỡ ở mọi đường thoát.
 - **Mask TRƯỚC.** `better-update env pull --stdout` in ra các dòng `export KEY='value'`; mỗi
   giá trị được `::add-mask::` trước khi bất cứ thứ gì kịp echo nó. Một giá trị kịp tới log
   trước khi mask của nó được đăng ký thì mask sau đó vô nghĩa.
-- **Keychain dùng một lần** cho mỗi job, `security list-keychains` *thêm* vào đầu search
-  list chứ không thay thế — thay thế là hất login keychain ra khỏi danh sách mà toolchain
-  Xcode vẫn đang đọc.
 
 ### Vì sao là better-update chứ không phải GitHub secrets
 
-Developer ID là của WEEBUILD VIET NAM và dùng chung cho nhiều sản phẩm (slop-desk, idealabs
-desktop, và đây). Nó nằm một chỗ duy nhất trong vault E2E của better-update; mọi pipeline
-kéo từ đó. Xoay chứng chỉ là sửa một chỗ, không phải đi sửa N repo.
+Developer ID và ASC key là của JMANGO VIETNAM và dùng chung cho nhiều sản phẩm. Chúng nằm một
+chỗ duy nhất trong vault E2E của better-update (workspace JMango, project `SlopShot`); mọi
+pipeline dùng từ đó. Xoay chứng chỉ là sửa một chỗ, không phải đi sửa N repo.
+
+Project phải được **bind** team Apple (`appleTeam`, kéo theo cert Developer ID) và ASC key, và
+robot phải được cấp quyền vault — cả hai là việc của org admin:
+
+```bash
+better-update credentials bindings add appleTeam <team-id> --project <project-id>
+better-update credentials bindings add ascApiKey <key-id> --project <project-id>
+better-update credentials robot create --project <project-id> --name slop-shot-ci
+better-update credentials access grant <robot-id>
+```
 
 **GitHub secret duy nhất của repo này:**
 
@@ -176,11 +185,6 @@ kéo từ đó. Xoay chứng chỉ là sửa một chỗ, không phải đi sử
 
 | biến | dùng ở job |
 |---|---|
-| `APPLE_CERTIFICATE_P12_BASE64` | package — .p12 Developer ID, base64 |
-| `APPLE_CERTIFICATE_PASSWORD` | package — mật khẩu của .p12 đó |
-| `APPLE_ID` | package — tài khoản notarytool |
-| `APPLE_TEAM_ID` | package — `AJ4R8GWM7A` |
-| `APPLE_APP_SPECIFIC_PASSWORD` | package — app-specific password của `APPLE_ID` |
 | `HOMEBREW_TAP_TOKEN` | tap — PAT có quyền push vào `aislopware/homebrew-tap` |
 
 CI cài better-update CLI bằng `install.sh` (binary độc lập, gói npm đã deprecated); không đặt
@@ -261,9 +265,8 @@ Chạy lại một release đã có (tag lại, retry job) là an toàn: job `pu
 | `CHANGELOG.md không có mục cho 0.2.0` | tag được push mà không qua `make release`. Chạy `scripts/render-changelog.sh --tag v0.2.0`, commit, tag lại. |
 | `version trong cây source lệch nhau` | ai đó sửa `project.yml` mà quên `make gen`. `scripts/bump-version.sh <version>`. |
 | `linux/Cargo.toml là x, tag là y` | tag cắt không qua `make release`. `scripts/bump-version.sh <version>`, commit, tag lại. |
-| `identity không có trong keychain nào đang mở` | ở máy: chưa cài .p12 Developer ID. Ở CI: `APPLE_CERTIFICATE_*` sai hoặc thiếu trong vault. |
+| better-update thoát mã 5 (missing vault credentials) | project chưa bind `appleTeam` / `ascApiKey`, hoặc robot chưa được `credentials access grant`. |
 | `binary thiếu slice x86_64` | có setting đè `ARCHS` trong `project.yml`. |
-| codesign đứng chờ mãi ở CI | thiếu `security set-key-partition-list` — nó đang đợi một hộp thoại UI không ai trả lời. |
 | `Project not linked` (mã 4) | `env pull` chạy ngoài checkout; job `tap` phải `checkout` **trước** `download-artifact`. |
 | `git-cliff không tính được version` | không có conventional commit nào sau tag gần nhất. Ép: `make release VERSION=x.y.z`. |
 | Gatekeeper chặn app tải về dù CI xanh | ticket chưa staple vào `.app` trước khi dựng DMG. Xem lại thứ tự ở mục 3. |

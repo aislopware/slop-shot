@@ -1,14 +1,14 @@
 # Release pipeline: tag → DMG đã ký + notarize → GitHub Release → Homebrew tap.
 #
-# ⚠ REPO NÀY PUBLIC — mọi dòng workflow này in ra là công khai vĩnh viễn. Bước duy nhất chạm
-# vào vật liệu ký có mask từng giá trị bằng `::add-mask::` TRƯỚC khi bất cứ thứ gì kịp echo nó,
-# và không bao giờ đẩy secret qua ranh giới step bằng `$GITHUB_ENV`. Giữ nguyên như vậy.
+# ⚠ REPO NÀY PUBLIC — mọi dòng workflow này in ra là công khai vĩnh viễn. Bước kéo biến từ vault
+# (job tap) mask từng giá trị bằng `::add-mask::` TRƯỚC khi bất cứ thứ gì kịp echo nó, và không
+# bao giờ đẩy secret qua ranh giới step bằng `$GITHUB_ENV`. Giữ nguyên như vậy.
 #
-# VÌ SAO credential đến từ better-update chứ không phải GitHub secrets: Developer ID là của
-# WEEBUILD VIET NAM và dùng chung cho nhiều sản phẩm (slop-desk, idealabs desktop, và đây); nó
-# nằm một chỗ duy nhất trong vault E2E của better-update và mọi pipeline kéo từ đó. GitHub secret
-# DUY NHẤT ở repo này là BETTER_UPDATE_ROBOT — token robot để mở vault. Cách dựng và danh sách
-# biến đầy đủ: docs/release-pipeline.md.
+# VÌ SAO credential đến từ better-update chứ không phải GitHub secrets: Developer ID và ASC key
+# là của JMANGO VIETNAM (UK58J62H8L), dùng chung cho nhiều sản phẩm; chúng nằm một chỗ duy nhất
+# trong vault E2E của better-update và better-update CLI ký + notarize thẳng từ đó, không .p12
+# nào đi qua workflow. GitHub secret DUY NHẤT ở repo này là BETTER_UPDATE_ROBOT — token robot của
+# project. Cách dựng và danh sách biến đầy đủ: docs/release-pipeline.md.
 name: Release
 
 run-name: "Release ${{ inputs.version || github.ref_name }}${{ inputs.dry-run && ' (dry run)' || '' }}"
@@ -72,9 +72,9 @@ jobs:
         with:
           bun-version: latest
 
-      # MỘT step cho mọi thứ chạm vào vật liệu ký: pull → mask → source → import → build → ký →
-      # notarize. Không secret nào vượt ranh giới step, nên không có `$GITHUB_ENV` hay `set -x`
-      # của step sau nào làm lộ được.
+      # better-update CLI ký và notarize bằng Developer ID + ASC key của JMango trong vault; robot
+      # token chỉ nằm trong env của đúng step này. Không còn .p12 hay keychain nào do workflow
+      # tự dựng: CLI tạo keychain dùng một lần và gỡ nó ở mọi đường thoát.
       - name: Build, sign and notarize
         env:
           BETTER_UPDATE_ROBOT: ${{ secrets.BETTER_UPDATE_ROBOT }}
@@ -83,53 +83,10 @@ jobs:
           SLOPSHOT_SKIP_NOTARIZE: ${{ inputs.dry-run && '1' || '0' }}
         run: |
           set -euo pipefail
-          umask 077
-
           # better-update CLI là binary độc lập cài bằng install.sh (gói npm đã deprecated);
           # không đặt BETTER_UPDATE_VERSION thì nó cài bản mới nhất.
           curl -fsSL https://raw.githubusercontent.com/aislopware/better-update/main/install.sh | sh
           export PATH="$HOME/.local/bin:$PATH"
-          vault="${RUNNER_TEMP}/vault.sh"
-          better-update env pull --environment production --stdout > "${vault}"
-
-          # Mask TRƯỚC. `env pull --stdout` in ra các dòng `export KEY='value'`; một giá trị kịp
-          # tới log trước khi mask của nó được đăng ký là công khai vĩnh viễn.
-          while IFS= read -r line; do
-            case "${line}" in export\ *) ;; *) continue ;; esac
-            value="${line#*=}"
-            value="${value#\'}"
-            value="${value%\'}"
-            [ -n "${value}" ] && echo "::add-mask::${value}"
-          done < "${vault}"
-
-          # shellcheck disable=SC1090
-          . "${vault}"
-          rm -f "${vault}"
-
-          # Keychain dùng một lần, chỉ mở trong job này. Runner là ephemeral, nhưng đổi thẳng
-          # default keychain thì trên một runner self-hosted nó sống lâu hơn cái step này.
-          keychain="${RUNNER_TEMP}/slopshot-build.keychain-db"
-          keychain_password="$(uuidgen)"
-          echo "::add-mask::${keychain_password}"
-          security create-keychain -p "${keychain_password}" "${keychain}"
-          security set-keychain-settings -lut 7200 "${keychain}"
-          security unlock-keychain -p "${keychain_password}" "${keychain}"
-          # THÊM vào đầu search list chứ không thay thế: `security create-keychain` không tự thêm
-          # keychain vào list, còn `-s "${keychain}"` một mình sẽ hất login keychain ra khỏi danh
-          # sách mà toolchain Xcode vẫn đang đọc.
-          existing="$(security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"$//')"
-          # shellcheck disable=SC2086
-          security list-keychains -d user -s "${keychain}" ${existing}
-
-          p12="${RUNNER_TEMP}/developer-id.p12"
-          printf '%s' "${APPLE_CERTIFICATE_P12_BASE64}" | base64 --decode > "${p12}"
-          security import "${p12}" -k "${keychain}" -P "${APPLE_CERTIFICATE_PASSWORD}" \
-            -T /usr/bin/codesign -T /usr/bin/security
-          rm -f "${p12}"
-          # Thiếu dòng này thì codesign đứng chờ một hộp thoại UI mà không runner nào trả lời được.
-          security set-key-partition-list -S apple-tool:,apple:,codesign: \
-            -s -k "${keychain_password}" "${keychain}" > /dev/null
-
           scripts/package-release.sh
 
       - name: Upload artifacts

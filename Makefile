@@ -49,7 +49,7 @@ hooks:
 
 # ── Release ────────────────────────────────────────────────────────────────
 # Bốn lệnh trên là "chạy ở máy mình"; mấy lệnh dưới là "ship cho người khác":
-# ký bằng Developer ID của WEEBUILD, notarize qua Apple, ra DMG cho Homebrew.
+# ký bằng Developer ID của JMango, notarize qua Apple, ra DMG cho Homebrew.
 # Toàn bộ quy trình: docs/release-pipeline.md
 .PHONY: release release-preview package version
 
@@ -67,7 +67,7 @@ version:
 	bash scripts/bump-version.sh $(VERSION)
 
 # Build + ký + notarize + đóng DMG vào dist/. CI chạy đúng script này.
-# Cần Developer ID trong keychain và thông tin notarytool (xem header của script).
+# Cần `better-update login` vào org có project trong eas.json (xem header của script).
 # Thử khô, chỉ ký không nộp Apple: make package VERSION=0.1.0 SKIP_NOTARIZE=1
 package:
 	SLOPSHOT_VERSION=$(VERSION) SLOPSHOT_SKIP_NOTARIZE=$(or $(SKIP_NOTARIZE),0) \
