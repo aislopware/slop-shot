@@ -158,6 +158,22 @@ async fn permission_store() -> anyhow::Result<zbus::Proxy<'static>> {
     .await?)
 }
 
+/// A Terminal command that stores Allow for this process, for when GNOME's prompt never
+/// shows up. gdbus rather than `flatpak permission-set`: Ubuntu doesn't ship flatpak.
+pub fn grant_command() -> String {
+    format!(
+        "gdbus call --session --dest org.freedesktop.impl.portal.PermissionStore \
+         --object-path /org/freedesktop/impl/portal/PermissionStore \
+         --method org.freedesktop.impl.portal.PermissionStore.SetPermission \
+         screenshot true screenshot '{}' \"['yes']\"",
+        portal_app_id()
+    )
+}
+
+pub fn copy_grant_command(cx: &mut gpui::App) {
+    cx.write_to_clipboard(gpui::ClipboardItem::new_string(grant_command()));
+}
+
 pub async fn permission_granted() -> Option<bool> {
     stored_permission().await.ok().flatten()
 }
@@ -178,25 +194,30 @@ pub fn request_permission_early(cx: &mut gpui::App) {
 /// ("Only the focused app is allowed to show a system access dialog") and a tray app has
 /// none, so the request goes out from behind this alert of ours; a request without it
 /// waits 25 s for a prompt that never appears.
+const NO_PROMPT: &str = "If no prompt appears, choose Copy Command, paste it into Terminal and press Enter.";
+
 pub fn ask_permission(refused: bool, retry: Option<crate::ipc::Command>, cx: &mut gpui::App) {
     let alert = if refused {
         // GNOME stores a Deny forever and never asks again, so without this a single
         // mis-click leaves SlopShot unable to capture with no explanation.
         crate::alert::Alert {
             title: "SlopShot needs permission to take screenshots".into(),
-            message: "GNOME is blocking screen capture for SlopShot because the screenshot prompt was answered with Deny, and it remembers that answer.\n\nChoose Ask Again, then Allow in the prompt that follows.".into(),
-            buttons: vec!["Ask Again", "Later"],
+            message: format!("GNOME is blocking screen capture for SlopShot because the screenshot prompt was answered with Deny, and it remembers that answer.\n\nChoose Ask Again, then Allow in the prompt that follows. {NO_PROMPT}"),
+            buttons: vec!["Ask Again", "Copy Command", "Later"],
         }
     } else {
         crate::alert::Alert {
             title: "SlopShot needs permission to take screenshots".into(),
-            message: "GNOME asks once whether SlopShot may read the screen, which every capture needs.\n\nChoose Continue, then Allow in the prompt that follows.".into(),
-            buttons: vec!["Continue", "Later"],
+            message: format!("GNOME asks once whether SlopShot may read the screen, which every capture needs.\n\nChoose Continue, then Allow in the prompt that follows. {NO_PROMPT}"),
+            buttons: vec!["Continue", "Copy Command", "Later"],
         }
     };
     crate::alert::show_holding(
         alert,
         move |choice, cx| {
+            if choice == 1 {
+                copy_grant_command(cx);
+            }
             if choice != 0 {
                 return None;
             }
