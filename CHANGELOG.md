@@ -4,6 +4,18 @@ Sinh từ commit log bằng [git-cliff](https://git-cliff.org). Mục nào nằm
 loại (type) của commit quyết định — tức quyết định lúc VIẾT commit, không phải lúc cắt
 release. Quy ước được `scripts/check-commit-msg.sh` chặn ngay ở hook commit-msg.
 
+## [0.9.2](https://github.com/aislopware/slop-shot/compare/v0.9.1...v0.9.2) — 2026-10-07
+
+### Features
+
+- Ubuntu port in Rust + GPUI, released as .deb packages ([`e513021`](https://github.com/aislopware/slop-shot/commit/e513021cd7056d86f89032f7e96bea029a418a07))
+
+### Bug fixes
+
+- Keep the E2E exit status, upload its evidence ([`bc564f8`](https://github.com/aislopware/slop-shot/commit/bc564f8bff28bf471b993441d824bd5fabfe3aa4))
+- Ask for the screenshot permission from a focused window ([`2f5f7a5`](https://github.com/aislopware/slop-shot/commit/2f5f7a508a8850d219f04957655f13d0b53b5f6d))
+- Wrap the Privacy footer instead of clipping it ([`b44c777`](https://github.com/aislopware/slop-shot/commit/b44c77734dce51499ffbf55c0920b9c0512d0d8c))
+
 ## [0.9.1](https://github.com/aislopware/slop-shot/compare/v0.9.0...v0.9.1) — 2026-10-01
 
 ### Bug fixes
