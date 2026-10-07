@@ -21,3 +21,6 @@ if ! command -v cargo > /dev/null && [ ! -x "$HOME/.cargo/bin/cargo" ]; then
   curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
 fi
 "$HOME/.cargo/bin/cargo" install cargo-deb --locked
+# The E2E suite starts SlopShot in a systemd user scope, as GNOME does. A CI runner has no
+# login session to bring the user manager up, so it is kept up regardless.
+sudo loginctl enable-linger "$USER"

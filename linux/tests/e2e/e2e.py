@@ -28,6 +28,7 @@ EVIDENCE = pathlib.Path(os.environ.get("SLOPSHOT_EVIDENCE", "/tmp/slopshot-evide
 HOME = pathlib.Path(os.environ["HOME"])
 SETTINGS = HOME / ".config" / "slopshot" / "settings.json"
 TEMP_DIR = pathlib.Path(f"/tmp/slopshot-{os.getuid()}")
+APP_ID = "com.thanglb.slopshot"
 
 BTN_LEFT = 272
 KEY = {"ctrl": 0xFFE3, "s": 0x73, "f": 0x66, "escape": 0xFF1B, "return": 0xFF0D, "tab": 0xFF09, "right": 0xFF53,
@@ -189,14 +190,58 @@ def notifications():
     return [json.loads(line) for line in NOTIFY_LOG.read_text().splitlines()]
 
 
-def screenshot_permission():
+def screenshot_permission(app=APP_ID):
     store = BUS.get_object("org.freedesktop.impl.portal.PermissionStore",
                            "/org/freedesktop/impl/portal/PermissionStore")
     try:
-        return [str(p) for p in store.GetPermission("screenshot", "screenshot", "",
+        return [str(p) for p in store.GetPermission("screenshot", "screenshot", app,
                                                     dbus_interface="org.freedesktop.impl.portal.PermissionStore")]
     except dbus.DBusException:
         return []
+
+
+def leave_overview():
+    """GNOME Shell starts in the overview, where windows are thumbnails and typing goes to
+    its search."""
+    shell = BUS.get_object("org.gnome.Shell", "/org/gnome/Shell")
+    props = dbus.Interface(shell, "org.freedesktop.DBus.Properties")
+    props.Set("org.gnome.Shell", "OverviewActive", False)
+    wait_for(lambda: not props.Get("org.gnome.Shell", "OverviewActive"), 5)
+    time.sleep(0.5)  # the closing animation
+
+
+def alerts_opened():
+    return (EVIDENCE / "app.log").read_text().count("alert opened (")
+
+
+def default_button(shot):
+    """Centre of the white default button of an alert, or None. Near-black on both sides is
+    what sets it apart from a white notification banner."""
+    rgb = shot[:, :, :3].astype(int)
+    white = (rgb >= 240).all(axis=2)
+    dark = (rgb <= 40).all(axis=2)
+    rows = []
+    for y in range(rgb.shape[0]):
+        xs = np.flatnonzero(white[y])
+        if not len(xs):
+            continue
+        breaks = np.flatnonzero(np.diff(xs) > 1)
+        for a, b in zip(np.r_[xs[0], xs[breaks + 1]], np.r_[xs[breaks], xs[-1]]):
+            if 60 <= b - a <= 200 and a >= 3 and b + 3 < rgb.shape[1] and dark[y, a - 3] and dark[y, b + 3]:
+                rows.append((y, (a + b) // 2))
+    if len(rows) < 10:
+        return None
+    return rows[0][1], (rows[0][0] + rows[-1][0]) // 2
+
+
+def click_alert_default(inp, name):
+    """Clicks the newest alert's default button, as a person would: a window a script opens
+    doesn't get keyboard focus, and the click is what gives it."""
+    leave_overview()
+    button = default_button(portal_screenshot(name))
+    check(button is not None, f"{name}: the alert's default button is on screen")
+    if button:
+        inp.click(*button)
 
 
 def wait_overlay_opened(before, timeout=10):
@@ -268,12 +313,15 @@ def main():
                                stdout=subprocess.PIPE, text=True)
     assert notifyd.stdout.readline().strip() == "ready"
 
+    only = os.environ.get("SLOPSHOT_E2E_ONLY", "").split(",") if os.environ.get("SLOPSHOT_E2E_ONLY") else None
+    if only:
+        allow_screenshots()
+    else:
+        allow_screenshots("")
     app = App()
     inp = Input()
-    only = os.environ.get("SLOPSHOT_E2E_ONLY", "").split(",") if os.environ.get("SLOPSHOT_E2E_ONLY") else None
     try:
         if only:
-            allow_screenshots()
             time.sleep(2)
         else:
             app = run(app, inp)
@@ -294,12 +342,22 @@ def main():
 
 
 class App:
-    """The running SlopShot instance; its log accumulates across restarts."""
+    """The running SlopShot instance; its log accumulates across restarts. Started the way
+    GNOME starts an app from its grid or at login, in an app-gnome-<id>-<n>.scope: that is
+    where xdg-desktop-portal reads the app ID it files the screenshot permission under. This
+    script has none, so its own reference screenshots are allowed separately, under ""."""
 
     def __init__(self):
         self.log = open(EVIDENCE / "app.log", "a")
-        self.proc = subprocess.Popen([BIN], stdout=self.log, stderr=subprocess.STDOUT,
-                                     env={**os.environ, "RUST_LOG": "slopshot=debug,warn"})
+        uid = os.getuid()
+        # systemd-run talks to the real user manager; SlopShot gets this session's bus back.
+        manager = {**os.environ, "XDG_RUNTIME_DIR": f"/run/user/{uid}",
+                   "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus"}
+        self.proc = subprocess.Popen(
+            ["systemd-run", "--user", "--scope", "--quiet", f"--unit=app-gnome-{APP_ID}-{time.time_ns()}.scope",
+             "env", f"XDG_RUNTIME_DIR={os.environ['XDG_RUNTIME_DIR']}",
+             f"DBUS_SESSION_BUS_ADDRESS={os.environ['DBUS_SESSION_BUS_ADDRESS']}", "RUST_LOG=slopshot=debug,warn", BIN],
+            stdout=self.log, stderr=subprocess.STDOUT, env=manager)
 
     def stop(self):
         if self.proc.poll() is None:
@@ -353,17 +411,22 @@ def run(app, inp):
         capture_output=True, text=True).stdout.strip()
     check(area_binding.endswith(" area'"), f"area shortcut runs `slopshot area` ({area_binding})")
 
-    # Like macOS asking for Screen Recording at launch, the app triggers GNOME's
-    # "Allow … to take screenshots?" prompt right away. Enter presses its default, Deny.
+    # Like macOS asking for Screen Recording at launch, the app asks right away. GNOME Shell
+    # only shows its "Allow … to take screenshots?" for the focused app, so the app opens an
+    # alert of its own first and asks from behind it once Continue is clicked.
+    check(wait_for(lambda: alerts_opened() == 1, 15) is not None, "the app asks for the permission at launch")
+    time.sleep(1)  # mapped and drawn
+    click_alert_default(inp, "00-launch-alert")
     time.sleep(2)
-    inp.keys("return")
+    portal_screenshot("00-gnome-prompt")
+    inp.keys("return")  # GNOME's prompt defaults to Deny
     check(wait_for(lambda: screenshot_permission() == ["no"], 5) is not None,
           f"Deny in the launch prompt is stored ({screenshot_permission()})")
     slopshot("area")
-    # No screenshot here: the stored Deny covers this script too (same empty app ID).
-    time.sleep(1.5)
-    # The alert's default button is Ask Again: it forgets the Deny and retries.
-    inp.keys("return")
+    check(wait_for(lambda: alerts_opened() == 2, 10) is not None, "a capture after Deny explains it")
+    time.sleep(1)
+    # Ask Again forgets the Deny and asks GNOME again, then retries the capture.
+    click_alert_default(inp, "00-refused-alert")
     check(wait_for(lambda: screenshot_permission() == [], 5) is not None, "Ask Again deletes the stored Deny")
     time.sleep(2)
     inp.keys("tab")
@@ -550,12 +613,13 @@ def run(app, inp):
     return app
 
 
-def allow_screenshots():
+def allow_screenshots(*apps):
     """Grants what the launch prompt asks, for runs that skip the prompt tests."""
     store = BUS.get_object("org.freedesktop.impl.portal.PermissionStore",
                            "/org/freedesktop/impl/portal/PermissionStore")
-    store.SetPermission("screenshot", True, "screenshot", "", ["yes"],
-                        dbus_interface="org.freedesktop.impl.portal.PermissionStore")
+    for app in apps or ("", APP_ID):
+        store.SetPermission("screenshot", True, "screenshot", app, ["yes"],
+                            dbus_interface="org.freedesktop.impl.portal.PermissionStore")
 
 
 def select_area(inp, command, rect=(100, 100, 500, 400)):

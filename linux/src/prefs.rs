@@ -389,17 +389,10 @@ impl Prefs {
                             .flex_none()
                             .child(Icon::new(icon).size(px(14.)).text_color(color))
                             .child(div().text_sm().text_color(color).child(text))
-                            .when(self.permission == Some(false), |d| {
-                                d.child(Button::new("ask").small().label("Ask Again").on_click(|_, _, cx| {
-                                    cx.spawn(async move |cx| {
-                                        let result = capture::forget_refusal().await;
-                                        cx.update(|cx| match result {
-                                            Ok(()) => crate::run(crate::ipc::Command::CaptureFullscreen, cx),
-                                            Err(err) => crate::alert::error("Capture failed", &format!("{err:#}"), cx),
-                                        });
-                                    })
-                                    .detach();
-                                }))
+                            .when(self.permission != Some(true), |d| {
+                                let refused = self.permission == Some(false);
+                                let label = if refused { "Ask Again" } else { "Ask Now" };
+                                d.child(Button::new("ask").small().label(label).on_click(move |_, _, cx| capture::ask_permission(refused, None, cx)))
                             }),
                     )],
                 None,

@@ -14,7 +14,12 @@ if [ -z "${SLOPSHOT_E2E_INNER:-}" ]; then
   # A fresh home: no settings, dconf database or GNOME shortcuts carried between runs.
   export HOME="$run_dir/home"
   unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME XDG_STATE_HOME
-  mkdir -p "$HOME"
+  mkdir -p "$HOME/.local/share/applications"
+  # Where the .deb puts it, ahead of GNOME Shell: the Shell knows SlopShot's windows as
+  # SlopShot by this file, and shows the permission prompt only for the focused app. GLib
+  # ignores an entry whose Exec isn't on the PATH, so it points at the binary under test.
+  sed "s|^Exec=slopshot|Exec=${SLOPSHOT_BIN:-slopshot}|" "$(dirname "$0")/../../data/com.thanglb.slopshot.desktop" \
+    > "$HOME/.local/share/applications/com.thanglb.slopshot.desktop"
   # xdg-document-portal leaves a FUSE mount in the runtime dir, or none if it never started.
   trap 'fusermount3 -uz "$run_dir/doc" 2> /dev/null || true; rm -rf "$run_dir"' EXIT
   dbus-run-session -- "$0" "$@"
