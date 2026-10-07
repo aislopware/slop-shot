@@ -247,7 +247,7 @@ impl Target {
 fn capture(target: Target, cx: &mut App) {
     cx.set_global(flow::Busy);
     cx.spawn(async move |cx| {
-        let result = capture::screenshot().await;
+        let result = capture::screenshot_if_asked().await;
         cx.update(|cx| {
             // The overlay keeps the session busy until it closes.
             if !(result.is_ok() && !matches!(target, Target::Fullscreen)) {
@@ -257,7 +257,8 @@ fn capture(target: Target, cx: &mut App) {
                 (Ok(image), Target::Area(purpose)) => overlay::open_for(Mode::Area, purpose, image, cx),
                 (Ok(image), Target::Color) => overlay::open(Mode::Color, image, cx),
                 (Ok(image), Target::Fullscreen) => overlay::capture_fullscreen(image, cx),
-                (Err(capture::Failure::Refused), _) => capture::explain_refusal(target.command(), cx),
+                (Err(capture::Failure::Refused), _) => capture::ask_permission(true, Some(target.command()), cx),
+                (Err(capture::Failure::Unanswered), _) => capture::ask_permission(false, Some(target.command()), cx),
                 (Err(capture::Failure::Other(err)), _) => alert::error("Capture failed", &format!("{err:#}"), cx),
             }
         });

@@ -64,9 +64,10 @@ capture, recording, scrolling capture, OCR, history, the annotation editor with 
 GIF export, a tray icon and the same settings — except translation, which is macOS-only for
 now. Run `slopshot` once
 (or enable *Launch at login* in its Settings): on GNOME it registers `Ctrl+Alt+1` / `2` / `5`
-as system shortcuts, since GNOME has no portal for global hotkeys yet. The first capture
-shows GNOME's "Allow SlopShot to take screenshots?" prompt; pick **Allow** (Enter selects
-Deny). The tray icon needs the AppIndicator extension, which Ubuntu ships enabled.
+as system shortcuts, since GNOME has no portal for global hotkeys yet. On first launch
+SlopShot asks for the screenshot permission: click **Continue**, then **Allow** in GNOME's
+"Allow SlopShot to take screenshots?" prompt (Enter selects Deny). The tray icon needs the
+AppIndicator extension, which Ubuntu ships enabled.
 
 ## Tech stack
 
