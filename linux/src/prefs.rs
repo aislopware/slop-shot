@@ -413,13 +413,15 @@ impl Prefs {
             .child(
                 div()
                     .flex()
-                    .items_center()
+                    .items_start()
                     .gap_2()
                     .pt_3()
                     .text_xs()
                     .text_color(muted)
-                    .child(Icon::new(IconName::Lock).size(px(12.)).text_color(muted))
-                    .child("Both run on-device with Tesseract. No image, and no text read out of one, ever leaves this computer."),
+                    .child(Icon::new(IconName::Lock).size(px(12.)).text_color(muted).flex_none().mt(px(2.)))
+                    .child(div().flex_1().min_w_0().child(
+                        "Both run on-device with Tesseract. No image, and no text read out of one, ever leaves this computer.",
+                    )),
             )
             .into_any_element()
     }
