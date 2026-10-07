@@ -4,6 +4,16 @@ Sinh từ commit log bằng [git-cliff](https://git-cliff.org). Mục nào nằm
 loại (type) của commit quyết định — tức quyết định lúc VIẾT commit, không phải lúc cắt
 release. Quy ước được `scripts/check-commit-msg.sh` chặn ngay ở hook commit-msg.
 
+## [0.9.3](https://github.com/aislopware/slop-shot/compare/v0.9.2...v0.9.3) — 2026-10-07
+
+### Bug fixes
+
+- Keep recordings playable, offer a command for the permission ([`500403b`](https://github.com/aislopware/slop-shot/commit/500403b22e2cca5aa5a9d22e07b55e6f136f6157))
+
+### Tooling
+
+- Sign and notarize with JMango's Developer ID ([`170ff80`](https://github.com/aislopware/slop-shot/commit/170ff8002dff0a91a021b66250e0c06f34a25a66))
+
 ## [0.9.2](https://github.com/aislopware/slop-shot/compare/v0.9.1...v0.9.2) — 2026-10-07
 
 ### Features
