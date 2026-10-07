@@ -120,6 +120,7 @@ struct Prefs {
     recording: Option<&'static str>,
     shortcut_error: Option<SharedString>,
     permission: Option<bool>,
+    grant_copied: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -181,6 +182,7 @@ impl Prefs {
             recording: None,
             shortcut_error: None,
             permission: None,
+            grant_copied: false,
             _subscriptions: vec![a, b, c],
         }
     }
@@ -394,7 +396,32 @@ impl Prefs {
                                 let label = if refused { "Ask Again" } else { "Ask Now" };
                                 d.child(Button::new("ask").small().label(label).on_click(move |_, _, cx| capture::ask_permission(refused, None, cx)))
                             }),
-                    )],
+                    )]
+                .into_iter()
+                .chain((self.permission != Some(true)).then(|| {
+                    row(cx)
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_xs()
+                                .text_color(muted)
+                                .child("If GNOME's prompt never appears, copy the command, paste it into Terminal and press Enter."),
+                        )
+                        .child(
+                            Button::new("copy-grant")
+                                .small()
+                                .flex_none()
+                                .icon(if self.grant_copied { IconName::Check } else { IconName::Copy })
+                                .label(if self.grant_copied { "Copied" } else { "Copy Command" })
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    capture::copy_grant_command(cx);
+                                    this.grant_copied = true;
+                                    cx.notify();
+                                })),
+                        )
+                }))
+                .collect(),
                 None,
                 cx,
             ))

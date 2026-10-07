@@ -95,11 +95,14 @@ fn describe(rec: &Recording, cast: &Cast) -> anyhow::Result<String> {
     let (crop, w, h) = cast.crop(rec.display, rec.rect, rec.scale);
     let fps = 60.;
     let kbps = ((w * h) as f64 * fps * 0.12).clamp(4e6, 60e6) / 1000.;
+    // Fragmented, so a clip cut off before its end-of-stream (a crash, or an encoder still
+    // catching up when the wait below runs out) plays up to the last second instead of not
+    // at all: a plain MP4 has no index until the muxer finishes.
     let mut desc = format!(
         "{src} ! queue ! videoconvert ! {crop} ! videoscale ! \
          video/x-raw,width={w},height={h} ! videoconvert ! video/x-raw,format=I420,colorimetry=bt709 ! valve name=vvalve ! \
          x264enc bitrate={kbps} speed-preset=veryfast tune=zerolatency key-int-max=120 ! queue ! \
-         mp4mux name=mux ! filesink location=\"{file}\"",
+         mp4mux name=mux fragment-duration=1000 ! filesink location=\"{file}\"",
         src = cast.source("")?,
         kbps = kbps as u32,
         file = rec.file.display(),
@@ -226,6 +229,10 @@ fn abort(cx: &mut App) {
     }
 }
 
+/// A large area at 60 fps can leave x264 seconds behind the screen, all of which it still
+/// has to encode before the end-of-stream gets through.
+const EOS_WAIT: Duration = Duration::from_secs(30);
+
 /// Stop: the muxer needs end-of-stream to write a playable file; `finish` runs on EOS.
 pub fn stop(cx: &mut App) {
     let Some(rec) = cx.try_global::<Recording>() else { return };
@@ -242,10 +249,10 @@ pub fn stop(cx: &mut App) {
     }
     pipeline.send_event(gst::event::Eos::new());
     cx.spawn(async move |cx| {
-        cx.background_executor().timer(Duration::from_secs(5)).await;
+        cx.background_executor().timer(EOS_WAIT).await;
         cx.update(|cx| {
             if cx.try_global::<Recording>().is_some_and(|r| r.generation == generation) {
-                log::warn!("recording: no end-of-stream after 5 s");
+                log::warn!("recording: no end-of-stream after {EOS_WAIT:?}");
                 finish(cx);
             }
         });
