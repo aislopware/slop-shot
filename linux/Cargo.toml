@@ -1,6 +1,6 @@
 [package]
 name = "slopshot"
-version = "0.9.4"
+version = "0.9.5"
 edition = "2024"
 description = "Screenshot and annotation tool for Linux (GNOME/Wayland and X11)"
 license = "MIT"

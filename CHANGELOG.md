@@ -4,6 +4,12 @@ Sinh từ commit log bằng [git-cliff](https://git-cliff.org). Mục nào nằm
 loại (type) của commit quyết định — tức quyết định lúc VIẾT commit, không phải lúc cắt
 release. Quy ước được `scripts/check-commit-msg.sh` chặn ngay ở hook commit-msg.
 
+## [0.9.5](https://github.com/aislopware/slop-shot/compare/v0.9.4...v0.9.5) — 2026-10-08
+
+### Bug fixes
+
+- Skip page-wide rule bands, snap dark-edged album images ([`5d39b8c`](https://github.com/aislopware/slop-shot/commit/5d39b8cbde6dd6b3c5c06bf23b68efd76d793d21))
+
 ## [0.9.4](https://github.com/aislopware/slop-shot/compare/v0.9.3...v0.9.4) — 2026-10-08
 
 ### Bug fixes
