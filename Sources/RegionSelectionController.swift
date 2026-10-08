@@ -172,7 +172,7 @@ struct SelectionOverlay: View {
 
     private var hintSubtitle: String {
         model.snapEnabled
-            ? "click a highlighted area  ·  ⌥ free select  ·  ⇧ square  ·  hold space to move  ·  F full screen  ·  esc to cancel"
+            ? "click a highlighted area  ·  scroll to grow / shrink it  ·  ⌥ free select  ·  ⇧ square  ·  hold space to move  ·  F full screen  ·  esc to cancel"
             : "⇧ square  ·  hold space to move  ·  F full screen  ·  esc to cancel"
     }
 
@@ -375,6 +375,13 @@ final class SelectionEventView: NSView {
     var windows = WindowSnapper.empty
     var snap: SnapEngine? { didSet { refreshHover() } }
 
+    // Các khung lồng nhau dưới con trỏ, nhỏ → lớn (cấp cuối là cả cửa sổ).
+    // Cuộn chuột để đổi cấp; `pinnedHover` nhớ cấp đã cuộn tới để rê chuột
+    // trong khung đó không bị nhảy về cấp nhỏ nhất.
+    private var hoverLevels: [SnapTarget] = []
+    private var pinnedHover: SnapTarget?
+    private var scrollAccum: CGFloat = 0
+
     private var startPoint: NSPoint?
     private var freeMode = false            // giữ ⌥ = tắt bắt dính
     private var squareMode = false          // giữ ⇧ lúc kéo = khung vuông
@@ -417,6 +424,7 @@ final class SelectionEventView: NSView {
     // ── Bước chỉnh khung ─────────────────────────────────────────────────
 
     private func enterAdjust(_ rect: CGRect) {
+        pinnedHover = nil
         if model.skipAdjust {
             model.currentRect = rect
             model.hover = nil
@@ -536,27 +544,55 @@ final class SelectionEventView: NSView {
         refreshHover()
     }
 
-    /// Dò item dưới con trỏ: ưu tiên khung do phân tích pixel tìm ra, không có
-    /// thì lấy nguyên cửa sổ.
+    /// Dò các khung dưới con trỏ: khung do phân tích pixel tìm ra (nhỏ → lớn),
+    /// cấp cuối là nguyên cửa sổ. Mặc định khoanh khung nhỏ nhất.
     private func refreshHover() {
         guard model.snapEnabled, !freeMode, !model.dragging else {
+            hoverLevels = []
             if model.hover != nil { model.hover = nil }
             return
         }
         let win = windows.window(at: model.cursor)
-        var found: SnapTarget?
-        if let el = snap?.element(at: model.cursor, within: win ?? bounds) {
-            // Khung dò được gần trùng cửa sổ → lấy hẳn số đo cửa sổ cho chuẩn.
-            if let win, abs(el.minX - win.minX) < 4, abs(el.minY - win.minY) < 4,
-               abs(el.maxX - win.maxX) < 4, abs(el.maxY - win.maxY) < 4 {
-                found = SnapTarget(rect: win, isWindow: true)
-            } else {
-                found = SnapTarget(rect: el, isWindow: false)
+        var levels = (snap?.elements(at: model.cursor, within: win ?? bounds) ?? [])
+            .map { SnapTarget(rect: $0, isWindow: false) }
+        if let win {
+            // Khung dò được gần trùng cửa sổ → bỏ, cấp cửa sổ dùng số đo chuẩn.
+            levels.removeAll {
+                abs($0.rect.minX - win.minX) < 4 && abs($0.rect.minY - win.minY) < 4
+                    && abs($0.rect.maxX - win.maxX) < 4 && abs($0.rect.maxY - win.maxY) < 4
             }
-        } else if let win {
-            found = SnapTarget(rect: win, isWindow: true)
+            levels.append(SnapTarget(rect: win, isWindow: true))
         }
+        // Chuột lọt vào khe vài pt giữa 2 item (giữa 2 dòng danh sách) thì không
+        // có hộp nào → đừng nhảy ra cả cửa sổ rồi nhảy lại (chớp cả màn), giữ item cũ.
+        if !levels.contains(where: { !$0.isWindow }), let current = model.hover, !current.isWindow,
+           current.rect.insetBy(dx: -6, dy: -6).contains(model.cursor) {
+            levels.insert(current, at: 0)
+        }
+        hoverLevels = levels
+        if let pinned = pinnedHover, !levels.contains(pinned) { pinnedHover = nil }
+        let found = pinnedHover ?? levels.first
         if found != model.hover { model.hover = found }
+    }
+
+    /// Cuộn lên = khoanh khung to hơn bao ngoài, cuộn xuống = nhỏ lại.
+    override func scrollWheel(with event: NSEvent) {
+        guard !model.adjusting, !model.dragging, hoverLevels.count > 1,
+              let current = model.hover, let i = hoverLevels.firstIndex(of: current) else { return }
+        // Trackpad bắn hàng loạt delta nhỏ → cộng dồn đủ 1 nấc mới đổi cấp.
+        // Quy về hướng tay vật lý để "natural scrolling" bật hay tắt đều như nhau.
+        var dy = event.scrollingDeltaY
+        if event.isDirectionInvertedFromDevice { dy = -dy }
+        if event.phase == .began || event.momentumPhase == .began { scrollAccum = 0 }
+        guard event.momentumPhase.isEmpty else { return }   // bỏ quán tính, khỏi trượt qua nhiều cấp
+        scrollAccum += dy
+        let step: CGFloat = event.hasPreciseScrollingDeltas ? 24 : 1
+        guard abs(scrollAccum) >= step else { return }
+        let next = max(0, min(hoverLevels.count - 1, i + (scrollAccum > 0 ? 1 : -1)))
+        scrollAccum = 0
+        guard next != i else { return }
+        pinnedHover = next == 0 ? nil : hoverLevels[next]
+        model.hover = hoverLevels[next]
     }
 
     /// Hút 4 cạnh của khung đang kéo về biên gần nhất: cạnh cửa sổ (chính xác
@@ -606,12 +642,14 @@ final class SelectionEventView: NSView {
 
     override func mouseExited(with event: NSEvent) {
         model.pointerInside = false
+        pinnedHover = nil
         if model.hover != nil { model.hover = nil }
     }
 
     /// Bắt đầu chọn ở màn khác → màn này bỏ khung đang dở, về như lúc mới mở.
     func reset() {
         startPoint = nil
+        pinnedHover = nil
         grab = nil
         spaceMove = false
         model.currentRect = .zero

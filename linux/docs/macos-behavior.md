@@ -143,7 +143,7 @@ Snap guides (RegionSelectionController.swift:264-289): for each snapped edge, a 
 ### 3.3 Hint panel and tool badge
 - Hint panel: bottom-centered, 96 pt above the bottom edge; title 15 pt semibold white, subtitle 12 pt white 62%, padding 22 h / 15 v, HUD background radius 14 (OverlayChrome.swift:199-216; RegionSelectionController.swift:117-121).
   - Title, snap ON: **"Drag to capture · click a highlighted area · ⌥ free · esc"**; snap OFF: **"Drag to capture · esc to cancel"** (RegionSelectionController.swift:1024-1026).
-  - Subtitle, snap ON: **"click a highlighted area  ·  ⌥ free select  ·  ⇧ square  ·  hold space to move  ·  F full screen  ·  esc to cancel"**; snap OFF: **"⇧ square  ·  hold space to move  ·  F full screen  ·  esc to cancel"** (two spaces around each `·`) (RegionSelectionController.swift:173-177).
+  - Subtitle, snap ON: **"click a highlighted area  ·  scroll to grow / shrink it  ·  ⌥ free select  ·  ⇧ square  ·  hold space to move  ·  F full screen  ·  esc to cancel"**; snap OFF: **"⇧ square  ·  hold space to move  ·  F full screen  ·  esc to cancel"** (two spaces around each `·`) (RegionSelectionController.swift:173-177).
   - Hidden (opacity -> 0, 0.14 s) once the user presses the mouse (`interacted`) or presses F; reset when following a desktop switch (RegionSelectionController.swift:120-121, 681, 799, 997).
 - Tool badge: label with SF icon + title (e.g. camera icon + "Capture Area"), 13 pt semibold white, padding 14 h / 7 v, HUD background radius 16, shadow black 40% r6, centered horizontally at y = 58 pt from top. Fades to 15% opacity (0.12 s) when the cursor is within ±140 pt horizontally and ±50 pt vertically of its center. Stays for the whole session (OverlayChrome.swift:223-244).
 
@@ -161,12 +161,22 @@ Snap guides (RegionSelectionController.swift:264-289): for each snapped edge, a 
 - Hidden while the inline editor is active.
 
 ### 3.6 Snapping and hover (only if setting "Snap to window & item edges" is on, default on)
-- Window list snapshot taken per display **before** the overlay shows: on-screen, normal-layer (layer 0) windows, not SlopShot's, alpha > 0.05, clipped to the display, ≥ 24×24 pt; front-to-back order (SnapEngine.swift:52-86).
+- Window list snapshot taken per display **before** the overlay shows: on-screen windows at layer 0, plus windows of regular (Dock-icon) apps at layers 1 up to below the screen-saver level (e.g. Telegram's media viewer at layer 101), not SlopShot's, alpha > 0.05, clipped to the display, ≥ 24×24 pt; front-to-back order (SnapEngine.swift:52-86).
 - Pixel edge engine built off-main-thread from the frozen image (~20-40 ms); until ready, window geometry alone is used (RegionSelectionController.swift:1093-1104; SnapEngine.swift:134-240).
-- **Hover** (no drag in progress, ⌥ not held) (RegionSelectionController.swift:541-560):
+- **Hover** (no drag in progress, ⌥ not held) (RegionSelectionController.swift:549-596):
   - Window under cursor = top-most window containing it.
-  - Engine looks for the smallest "box" around the cursor inside that window (or whole screen): 4 candidate edges each side (up to 20), box sides ≥ 16 pt, all 4 sides coverage ≥ 0.80 and mean ≥ 0.86 (SnapEngine.swift:357-429).
-  - If the found box is within 4 pt of the window on all sides -> treat as Window; else Item. No box -> Window. No window -> nothing.
+  - Edge pixels: max per-channel difference between neighbours ≥ a **fixed** threshold of 16 (not adaptive: text-heavy screens used to push an adaptive threshold up and lose real 1 px UI borders). Only straight runs ≥ 20 pt (gaps ≤ 2 px) become candidate lines (SnapEngine.swift:140-230).
+  - Engine collects every "box" around the cursor inside that window (or whole screen), up to 20 candidate lines per side plus the window's own edges, box sides ≥ 16 pt (SnapEngine.swift:347-470):
+    - Window edges are known boundaries: they always count as a side (even at the screen edge, where there are no pixels), and an inner line meeting one must reach it within 2 px.
+    - Candidate lines: a line counts if it passes the cursor row/column, or covers ≥ half the span between the nearest perpendicular candidates (an image edge that blends into the backdrop right at the cursor). Of 3 adjacent lines (thick or double border), the longest is kept.
+    - Rounded corners: at each corner, measure how far each side's line starts from the corner (cap 24 pt). Both gaps must be within the cap, and at most one corner may have gaps that disagree (|a − b| > max(3 px, max(a, b)/3)) — a real rounded corner has equal gaps. Coverage (≥ 0.80 per side, mean ≥ 0.86) is measured on the straight part only, which must be ≥ 1/4 of the side.
+    - Large boxes (≥ 160 pt both ways) may miss one corner (a dark photo blending into a dark viewer backdrop) if the other three agree; then coverage needs min ≥ 0.50 and mean ≥ 0.78, and the score drops by 0.15.
+    - Stacks rejected: a line spanning ≥ 90% of the box through its middle 40% (either axis), at least 60% as strong as the box's own border, means "several items" (two list rows), not one. Weaker inner lines (a grid inside a picture) are fine.
+    - Crossing boxes (overlap, neither contains the other) can't both be real: keep the one with the higher score (mean coverage − 0.05 per disagreeing corner).
+    - Remaining boxes sorted by area form a nested chain, smallest first. A box that only adds a thin strip on ≤ 2 sides (≤ max(6 px, 1/8) of the first box of that item), or ≤ 2 px all round, replaces the previous level instead of adding one; an even margin all round (a picture inside a chat bubble) is a separate level.
+  - Levels = that chain, minus boxes within 4 pt of the window, plus the **Window** as the last level. Default = the smallest. No window -> just the chain (or nothing).
+  - When the cursor falls into a gap with no box (a few pt between two list rows), the previous item stays highlighted while the cursor is within 6 pt of it, instead of flashing to the Window and back.
+  - **Scroll wheel** steps through levels: physical scroll up = bigger, down = smaller (respecting natural scrolling). Trackpad deltas are accumulated to 24 per step; momentum is ignored. A level reached by scrolling stays selected while the cursor moves as long as it is still in the new chain; otherwise it falls back to the smallest (RegionSelectionController.swift:573-591).
   - Hover is primed at overlay open from the current mouse position, so a highlight appears without moving the mouse (RegionSelectionController.swift:1084-1091).
   - Leaving a display clears that display's hover (RegionSelectionController.swift:607-610).
 - **Edge snapping while dragging/resizing** (RegionSelectionController.swift:564-599): radius 9 pt. Each of the 4 edges independently snaps first to the nearest window edge within 9 pt, else to the best pixel edge (coverage ≥ 0.55 along the selection's span, score = coverage − 0.25×distance/radius) (SnapEngine.swift:312-349). Snapped edges produce teal guides. Rects < 3 pt in either dimension are not snapped.

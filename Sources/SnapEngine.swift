@@ -11,13 +11,14 @@ import AppKit
 //            biên thật; nền tối/ảnh nhiễu thì dò trượt. Không có "khoanh nguyên
 //            item", chỉ snap từng cạnh rời rạc.
 //
-//   ở đây:   1) ngưỡng THÍCH ỨNG tính từ chính ảnh (percentile) → nền tối,
-//               nền sáng, ảnh game nhiều màu đều ra ngưỡng hợp lý.
+//   ở đây:   1) ngưỡng thấp, cố định; nhiễu lọc bằng cách chỉ nhận ĐƯỜNG thẳng
+//               dài làm ứng viên cạnh.
 //            2) chấm điểm = ĐỘ PHỦ của biên dọc theo cạnh đang kéo, rồi mới trừ
 //               điểm theo khoảng cách → biên MẠNH thắng biên "gần mà mờ".
 //            3) dò nguyên KHUNG item dưới con trỏ: tìm 4 cạnh ứng viên rồi thử
 //               mọi tổ hợp, kiểm tra cả 4 cạnh có phủ đủ không (đúng nghĩa "đây
-//               là 1 cái hộp"), chọn hộp KHÍT NHẤT quanh con trỏ.
+//               là 1 cái hộp", chịu được góc bo), rồi xếp các hộp lồng nhau
+//               thành chuỗi nhỏ → lớn để cuộn chuột chọn cấp.
 //            4) mọi phép đo độ phủ chạy trên prefix-sum → rê chuột vẫn mượt.
 //
 // Toạ độ: mọi API công khai nhận/trả POINT, gốc TRÊN-TRÁI của màn hình đang
@@ -64,11 +65,23 @@ struct WindowSnapper {
         var rects: [CGRect] = []
         var xs = Set<CGFloat>(), ys = Set<CGFloat>()
 
+        // App thường (có Dock icon). Cửa sổ của Dock, thanh menu, Notification
+        // Center… cũng nằm ở layer > 0 nhưng không thuộc app thường.
+        var regular: [Int: Bool] = [:]
+        func isRegular(_ pid: Int) -> Bool {
+            if let known = regular[pid] { return known }
+            let r = NSRunningApplication(processIdentifier: pid_t(pid))?.activationPolicy == .regular
+            regular[pid] = r
+            return r
+        }
+
         for info in list {
-            // layer 0 = cửa sổ ứng dụng bình thường. Menu/tooltip/overlay ở layer
-            // khác — bỏ qua để khỏi khoanh nhầm mấy thứ trong suốt.
-            guard (info[kCGWindowLayer as String] as? Int) == 0,
-                  (info[kCGWindowOwnerPID as String] as? Int) != myPID,
+            // layer 0 = cửa sổ ứng dụng bình thường. Cửa sổ nổi của chính app
+            // (trình xem ảnh của Telegram ở layer 101, palette…) cũng tính, vì nó
+            // che cửa sổ chính bên dưới. Từ mức screen saver trở lên là của hệ thống.
+            guard let layer = info[kCGWindowLayer as String] as? Int,
+                  let pid = info[kCGWindowOwnerPID as String] as? Int, pid != myPID,
+                  layer == 0 || (layer > 0 && layer < Int(CGWindowLevelForKey(.screenSaverWindow)) && isRegular(pid)),
                   (info[kCGWindowAlpha as String] as? Double ?? 1) > 0.05,
                   let b = info[kCGWindowBounds as String] as? [String: CGFloat]
             else { continue }
@@ -102,7 +115,12 @@ final class SnapEngine: @unchecked Sendable {
     private let scale: CGFloat                    // pixel trên mỗi point
     private let vEdge: UnsafeMutablePointer<UInt8>  // [y*w + x] biên DỌC giữa cột x-1 và x
     private let hEdge: UnsafeMutablePointer<UInt8>  // [y*w + x] biên NGANG giữa hàng y-1 và y
-    private let thr: UInt8                          // ngưỡng "đây là biên thật"
+    // Ngưỡng "đây là biên thật": CỐ ĐỊNH, đủ thấp để bắt viền 1px nhạt
+    // (#e5e5e5 trên nền trắng, #2f3336 trên nền đen). Không nâng theo độ "nhiễu"
+    // của ảnh: màn nhiều chữ/ảnh sẽ đẩy ngưỡng lên và làm mất sạch viền UI thật,
+    // trong khi nhiễu đã bị lọc ở bước gom đường (chỉ giữ ĐƯỜNG thẳng dài).
+    private static let edgeThreshold: UInt8 = 16
+    private var thr: UInt8 { Self.edgeThreshold }
 
     // Danh sách ĐƯỜNG THẲNG dài dựng sẵn lúc build.
     // Segment của cột x nằm ở [vStart[x], vStart[x+1]) — mỗi cái là 1 đoạn
@@ -114,11 +132,11 @@ final class SnapEngine: @unchecked Sendable {
     private let hStart: [Int32], hA: [Int32], hB: [Int32]
 
     private init(w: Int, h: Int, scale: CGFloat,
-                 vEdge: UnsafeMutablePointer<UInt8>, hEdge: UnsafeMutablePointer<UInt8>, thr: UInt8,
+                 vEdge: UnsafeMutablePointer<UInt8>, hEdge: UnsafeMutablePointer<UInt8>,
                  vStart: [Int32], vA: [Int32], vB: [Int32],
                  hStart: [Int32], hA: [Int32], hB: [Int32]) {
         self.w = w; self.h = h; self.scale = scale
-        self.vEdge = vEdge; self.hEdge = hEdge; self.thr = thr
+        self.vEdge = vEdge; self.hEdge = hEdge
         self.vStart = vStart; self.vA = vA; self.vB = vB
         self.hStart = hStart; self.hA = hA; self.hB = hB
     }
@@ -156,36 +174,19 @@ final class SnapEngine: @unchecked Sendable {
 
         // Độ mạnh biên = chênh lệch LỚN NHẤT trong 3 kênh R/G/B. Nhạy hơn kiểu
         // "khoảng cách euclid chia 3" của macshot với mấy đường viền 1px nhạt.
-        var hist = [Int](repeating: 0, count: 256)
         for y in 0..<h {
             let row = y * bpr
             let base = y * w
             for x in 1..<w {
-                let d = chanDiff(pixels, row + (x - 1) * 4, row + x * 4)
-                vEdge[base + x] = d
-                hist[Int(d)] += 1
+                vEdge[base + x] = chanDiff(pixels, row + (x - 1) * 4, row + x * 4)
             }
             guard y >= 1 else { continue }
             let prev = (y - 1) * bpr
             for x in 0..<w {
-                let d = chanDiff(pixels, prev + x * 4, row + x * 4)
-                hEdge[base + x] = d
-                hist[Int(d)] += 1
+                hEdge[base + x] = chanDiff(pixels, prev + x * 4, row + x * 4)
             }
         }
-
-        // Ngưỡng thích ứng: lấy mốc ~1.5% mẫu mạnh nhất, kẹp trong [16, 64].
-        // Màn hình toàn UI phẳng → ngưỡng tụt về 16 (bắt được viền nhạt);
-        // màn đầy ảnh/nhiễu → ngưỡng dâng lên, khỏi dính vào chi tiết vụn.
-        let total = hist.reduce(0, +)
-        var cut = max(1, total * 15 / 1000)
-        var thr = 64
-        for v in stride(from: 255, through: 1, by: -1) {
-            cut -= hist[v]
-            if cut <= 0 { thr = v; break }
-        }
-        thr = min(64, max(16, thr))
-        let t = UInt8(thr)
+        let t = edgeThreshold
 
         // Gom các đoạn biên liên tục thành "đường". Cho hở tối đa 2 pixel (khử
         // răng cưa hay làm đứt vệt), và chỉ giữ đoạn dài ≥ ~20pt.
@@ -235,7 +236,7 @@ final class SnapEngine: @unchecked Sendable {
         }
         hStart[h] = Int32(hA.count)
 
-        return SnapEngine(w: w, h: h, scale: scale, vEdge: vEdge, hEdge: hEdge, thr: t,
+        return SnapEngine(w: w, h: h, scale: scale, vEdge: vEdge, hEdge: hEdge,
                           vStart: vStart, vA: vA, vB: vB, hStart: hStart, hA: hA, hB: hB)
     }
 
@@ -256,29 +257,51 @@ final class SnapEngine: @unchecked Sendable {
 
     /// Các cột có ĐƯỜNG DỌC đi ngang qua hàng `row`, quét từ `from` về phía
     /// `stop`, gần nhất trước. Trả tối đa `limit` cột.
-    private func vLines(from: Int, stop: Int, row: Int, limit: Int) -> [Int] {
-        var out: [Int] = []
-        let step = stop > from ? 1 : -1
-        var x = from + step * 2
-        while out.count < limit, x >= 1, x < w, step > 0 ? x <= stop : x >= stop {
-            var hit = false
-            for i in Int(vStart[x])..<Int(vStart[x + 1])
-            where Int(vA[i]) - 2 <= row && row <= Int(vB[i]) + 2 { hit = true; break }
-            if hit { out.append(x); x += step * 3 } else { x += step }  // nhảy qua viền dày vài px
-        }
-        return out
+    /// `span`: thêm cả các đường phủ ≥ nửa đoạn này dù không đi qua `row` —
+    /// mép ảnh hoà vào nền ở đúng chỗ con trỏ thì vẫn bắt được nhờ phần còn lại.
+    private func vLines(from: Int, stop: Int, row: Int, span: ClosedRange<Int>? = nil, limit: Int) -> [Int] {
+        Self.lines(vStart, vA, vB, count: w, from: from, stop: stop, across: row, span: span, limit: limit)
     }
 
     /// Các hàng có ĐƯỜNG NGANG đi qua cột `col`.
-    private func hLines(from: Int, stop: Int, col: Int, limit: Int) -> [Int] {
+    private func hLines(from: Int, stop: Int, col: Int, span: ClosedRange<Int>? = nil, limit: Int) -> [Int] {
+        Self.lines(hStart, hA, hB, count: h, from: from, stop: stop, across: col, span: span, limit: limit)
+    }
+
+    private static func lines(_ start: [Int32], _ a: [Int32], _ b: [Int32], count: Int,
+                              from: Int, stop: Int, across p: Int, span: ClosedRange<Int>?,
+                              limit: Int) -> [Int] {
+        /// Độ dài đường ở cột/hàng `i` nếu nó đi qua `p` hoặc phủ ≥ nửa `span`
+        /// (0 = không tính).
+        func reach(_ i: Int) -> Int {
+            guard i >= 1, i < count else { return 0 }
+            var through = 0, inSpan = 0, total = 0
+            for k in Int(start[i])..<Int(start[i + 1]) {
+                let lo = Int(a[k]), hi = Int(b[k])
+                total += hi - lo + 1
+                if lo - 2 <= p && p <= hi + 2 { through = hi - lo + 1 }
+                if let span { inSpan += max(0, min(hi, span.upperBound) - max(lo, span.lowerBound) + 1) }
+            }
+            if through > 0 { return total }
+            if let span, inSpan * 2 >= span.count { return total }
+            return 0
+        }
         var out: [Int] = []
         let step = stop > from ? 1 : -1
-        var y = from + step * 2
-        while out.count < limit, y >= 1, y < h, step > 0 ? y <= stop : y >= stop {
-            var hit = false
-            for i in Int(hStart[y])..<Int(hStart[y + 1])
-            where Int(hA[i]) - 2 <= col && col <= Int(hB[i]) + 2 { hit = true; break }
-            if hit { out.append(y); y += step * 3 } else { y += step }
+        var i = from + step * 2
+        while out.count < limit, i >= 1, i < count, step > 0 ? i <= stop : i >= stop {
+            var bestLen = reach(i)
+            guard bestLen > 0 else { i += step; continue }
+            // Viền dày / viền kép chiếm vài px liền nhau: chỉ lấy 1 đường cho cả
+            // cụm, và lấy đường DÀI nhất — đường đầu tiên gặp có thể chỉ là 1
+            // mẩu ngắn sát bên mép thật.
+            var best = i
+            for j in [i + step, i + 2 * step] {
+                let len = reach(j)
+                if len > bestLen { best = j; bestLen = len }
+            }
+            out.append(best)
+            i += step * 3
         }
         return out
     }
@@ -352,12 +375,13 @@ final class SnapEngine: @unchecked Sendable {
     // B. DÒ NGUYÊN KHUNG ITEM dưới con trỏ (thứ macshot chưa có)
     // ═════════════════════════════════════════════════════════════════════
 
-    /// Khoanh item nhỏ nhất bao quanh `point`, chỉ tìm trong `limit`
-    /// (thường là rect của cửa sổ đang rê chuột lên).
-    func element(at point: CGPoint, within limit: CGRect) -> CGRect? {
+    /// Các khung lồng nhau bao quanh `point`, từ nhỏ tới lớn (nút → thẻ → cột…),
+    /// chỉ tìm trong `limit` (thường là rect của cửa sổ đang rê chuột lên).
+    /// Không trả về khung trùng nguyên `limit` — cấp đó người gọi tự thêm.
+    func elements(at point: CGPoint, within limit: CGRect) -> [CGRect] {
         let x0 = clamp(px(limit.minX), 0, w - 1), x1 = clamp(px(limit.maxX), 1, w)
         let y0 = clamp(px(limit.minY), 0, h - 1), y1 = clamp(px(limit.maxY), 1, h)
-        guard x1 - x0 > 16, y1 - y0 > 16 else { return nil }
+        guard x1 - x0 > 16, y1 - y0 > 16 else { return [] }
 
         let cx = clamp(px(point.x), x0, x1 - 1)
         let cy = clamp(px(point.y), y0, y1 - 1)
@@ -365,67 +389,213 @@ final class SnapEngine: @unchecked Sendable {
         let minSize = max(12, px(16))
         let limit = 20
 
-        // Ứng viên 4 cạnh = các ĐƯỜNG gần nhất theo 4 hướng; kèm mép vùng tìm
-        // kiếm (thường là mép cửa sổ) làm phương án chót.
+        // Ứng viên 4 cạnh = các ĐƯỜNG gần nhất theo 4 hướng, cộng mép vùng tìm
+        // kiếm. Mép vùng tìm là ranh giới đã biết (mép cửa sổ) nên luôn tính là
+        // cạnh thật — kể cả khi nó trùng mép màn hình, nơi không có pixel nào để đo.
         var lefts   = vLines(from: cx, stop: x0, row: cy, limit: limit)
         var rights  = vLines(from: cx, stop: x1 - 1, row: cy, limit: limit)
         var tops    = hLines(from: cy, stop: y0, col: cx, limit: limit)
         var bottoms = hLines(from: cy, stop: y1 - 1, col: cx, limit: limit)
-        if x0 >= 1, !lefts.contains(x0) { lefts.append(x0) }
-        if x1 <= w - 1, !rights.contains(x1) { rights.append(x1) }
-        if y0 >= 1, !tops.contains(y0) { tops.append(y0) }
-        if y1 <= h - 1, !bottoms.contains(y1) { bottoms.append(y1) }
-        guard !lefts.isEmpty, !rights.isEmpty, !tops.isEmpty, !bottoms.isEmpty else { return nil }
+        // Dò lại, nhận thêm đường phủ ≥ nửa khoảng giữa 2 cạnh gần nhất phía
+        // vuông góc (xem `span` ở vLines).
+        let xSpan = (lefts.first ?? x0)...((rights.first ?? x1) - 1)
+        let ySpan = (tops.first ?? y0)...((bottoms.first ?? y1) - 1)
+        lefts   = vLines(from: cx, stop: x0, row: cy, span: ySpan, limit: limit)
+        rights  = vLines(from: cx, stop: x1 - 1, row: cy, span: ySpan, limit: limit)
+        tops    = hLines(from: cy, stop: y0, col: cx, span: xSpan, limit: limit)
+        bottoms = hLines(from: cy, stop: y1 - 1, col: cx, span: xSpan, limit: limit)
+        if !lefts.contains(x0) { lefts.append(x0) }
+        if !rights.contains(x1) { rights.append(x1) }
+        if !tops.contains(y0) { tops.append(y0) }
+        if !bottoms.contains(y1) { bottoms.append(y1) }
 
         // Prefix-sum cho từng cạnh ứng viên → hỏi độ phủ đoạn bất kỳ trong O(1).
-        // Không có bước này thì 5×5×5×5 tổ hợp × vài nghìn pixel = giật khi rê chuột.
-        let colPre = lefts.map { columnPrefix($0, y0: y0, y1: y1 - 1) }
-            + rights.map { columnPrefix($0, y0: y0, y1: y1 - 1) }
-        let rowPre = tops.map { rowPrefix($0, x0: x0, x1: x1 - 1) }
-            + bottoms.map { rowPrefix($0, x0: x0, x1: x1 - 1) }
+        let colPre = (lefts + rights).map { columnPrefix($0, y0: y0, y1: y1 - 1) }
+        let rowPre = (tops + bottoms).map { rowPrefix($0, x0: x0, x1: x1 - 1) }
 
-        @inline(__always) func cov(_ pre: [Int32], _ lo: Int, _ hi: Int, _ base: Int) -> Float {
-            guard hi >= lo else { return 0 }
-            return Float(pre[hi - base + 1] - pre[lo - base]) / Float(hi - lo + 1)
+        // Góc bo: ảnh trong bong bóng chat, thẻ, panel… gần như đều bo góc, nên
+        // cạnh thẳng chỉ bắt đầu cách góc 1 đoạn đúng bằng bán kính. Đo khoảng
+        // hụt đó ở CẢ HAI cạnh gặp nhau tại góc: góc bo thật thì hai khoảng hụt
+        // bằng nhau (cùng bán kính), góc vuông thì cùng ≈ 0. Hộp "ăn gian" lấy
+        // nhầm 1 đường bên ngoài item thì lệch ở CẢ 2 góc của cạnh đó → loại.
+        // Cho phép lệch 1 góc: nhãn giờ, nút nổi… hay nằm sát 1 góc của ảnh.
+        let cap = px(24)
+        let large = px(160)
+        let vCands = lefts + rights, hCands = tops + bottoms
+        let gapV = vCands.map { x in
+            hCands.enumerated().map { hi, y in
+                hi < tops.count ? vGap(x: x, from: y, step: 1, cap: cap) : vGap(x: x, from: y - 1, step: -1, cap: cap)
+            }
+        }
+        let gapH = hCands.map { y in
+            vCands.enumerated().map { vi, x in
+                vi < lefts.count ? hGap(y: y, from: x, step: 1, cap: cap) : hGap(y: y, from: x - 1, step: -1, cap: cap)
+            }
+        }
+        /// nil = không thành góc (1 cạnh không chạm tới), false = có nhưng 2 cạnh lệch bán kính.
+        @inline(__always) func corner(_ gv: Int, _ gh: Int, vFixed: Bool, hFixed: Bool) -> Bool? {
+            // Mép cửa sổ thẳng tắp: đường bên trong mà chạm mép thì chạm sát.
+            if vFixed { return gh <= px(2) ? true : nil }
+            if hFixed { return gv <= px(2) ? true : nil }
+            guard gv <= cap, gh <= cap else { return nil }
+            return abs(gv - gh) <= max(px(3), max(gv, gh) / 3)
+        }
+        // Độ phủ trên phần THẲNG của cạnh (bỏ 2 đầu cong); phần thẳng quá ngắn
+        // so với cạnh thì không coi là cạnh.
+        @inline(__always) func cov(_ pre: [Int32], _ lo: Int, _ hi: Int, _ base: Int, _ g0: Int, _ g1: Int) -> Float {
+            let a = lo + g0, b = hi - g1
+            guard (b - a + 1) * 4 >= hi - lo + 1 else { return 0 }
+            return Float(pre[b - base + 1] - pre[a - base]) / Float(b - a + 1)
         }
 
-        // Các danh sách ứng viên đều xếp theo khoảng cách TĂNG DẦN nên diện tích
-        // cũng tăng dần theo chỉ số → gặp tổ hợp đã to hơn hộp tốt nhất là cắt
-        // luôn cả nhánh. Nhờ vậy 20⁴ tổ hợp thực tế chỉ duyệt vài trăm cái.
-        let minH = max(1, bottoms[0] - tops[0])
-        var best: CGRect?
-        var bestArea = Int.max
-        for (li, L) in lefts.enumerated() {
-            if (rights[0] - L) * minH >= bestArea { break }
-            for (ri, R) in rights.enumerated() {
-                if (R - L) * minH >= bestArea { break }
-                guard R - L >= minSize else { continue }
-                for (ti, T) in tops.enumerated() {
-                    if (R - L) * (bottoms[0] - T) >= bestArea { break }
-                    for (bi, B) in bottoms.enumerated() {
-                        let area = (R - L) * (B - T)
-                        if area >= bestArea { break }
-                        guard B - T >= minSize else { continue }
-
-                        let cL = cov(colPre[li], T, B - 1, y0)
-                        let cR = cov(colPre[lefts.count + ri], T, B - 1, y0)
-                        let cT = cov(rowPre[ti], L, R - 1, x0)
-                        let cB = cov(rowPre[tops.count + bi], L, R - 1, x0)
+        var boxes: [(l: Int, t: Int, r: Int, b: Int, score: Float)] = []
+        for (ti, T) in tops.enumerated() {
+            let bj0 = tops.count
+            for (bi, B) in bottoms.enumerated() where B - T >= minSize {
+                let bj = bj0 + bi
+                for (li, L) in lefts.enumerated() {
+                    for (ri, R) in rights.enumerated() where R - L >= minSize {
+                        let rj = lefts.count + ri
+                        let fl = L == x0, fr = R == x1, ft = T == y0, fb = B == y1
+                        if fl, fr, ft, fb { continue }
+                        let corners = [corner(gapV[li][ti], gapH[ti][li], vFixed: fl, hFixed: ft),
+                                       corner(gapV[rj][ti], gapH[ti][rj], vFixed: fr, hFixed: ft),
+                                       corner(gapV[li][bj], gapH[bj][li], vFixed: fl, hFixed: fb),
+                                       corner(gapV[rj][bj], gapH[bj][rj], vFixed: fr, hFixed: fb)]
+                        let missing = corners.filter { $0 == nil }.count
+                        let skewed = corners.filter { $0 == false }.count
+                        // Ảnh to trên nền tối (trình xem ảnh của Telegram, Preview…):
+                        // chỗ ảnh cũng tối thì viền ảnh hoà vào nền, 1 góc và 1-2
+                        // cạnh gần đó mất hẳn. Cho phép thiếu 1 góc nếu hộp đủ to
+                        // và 3 góc còn lại khớp nhau, đổi lại phải đạt ngưỡng phủ
+                        // riêng bên dưới. Hộp nhỏ thì vẫn đòi đủ 4 góc.
+                        let partial = missing == 1 && skewed == 0 && B - T >= large && R - L >= large
+                        guard missing == 0 && skewed <= 1 || partial else { continue }
+                        let cL = fl ? 1 : cov(colPre[li], T, B - 1, y0, gapV[li][ti], gapV[li][bj])
+                        let cR = fr ? 1 : cov(colPre[rj], T, B - 1, y0, gapV[rj][ti], gapV[rj][bj])
+                        let cT = ft ? 1 : cov(rowPre[ti], L, R - 1, x0, gapH[ti][li], gapH[ti][rj])
+                        let cB = fb ? 1 : cov(rowPre[bj], L, R - 1, x0, gapH[bj][li], gapH[bj][rj])
                         // Cả 4 cạnh đều phải "có mặt" gần như trọn vẹn thì mới
                         // đúng là 1 cái hộp — bước này snap-từng-cạnh không có.
                         // Ngưỡng đo trên ảnh thật: khung UI thật (nút, thẻ, panel)
                         // đạt min ≥ 0.85 / mean ≥ 0.91; còn "hộp" ăn may trong
                         // ảnh/artwork chỉ tầm min 0.67 / mean 0.77 → tách bạch rõ.
-                        guard min(min(cL, cR), min(cT, cB)) >= 0.80,
-                              (cL + cR + cT + cB) / 4 >= 0.86 else { continue }
-
-                        bestArea = area
-                        best = CGRect(x: pt(L), y: pt(T), width: pt(R - L), height: pt(B - T))
+                        let low = min(min(cL, cR), min(cT, cB)), mean = (cL + cR + cT + cB) / 4
+                        guard partial ? low >= 0.50 && mean >= 0.78 : low >= 0.80 && mean >= 0.86,
+                              !isStack(l: L, t: T, r: R, b: B) else { continue }
+                        boxes.append((L, T, R, B, mean - 0.05 * Float(skewed) - (partial ? 0.15 : 0)))
                     }
                 }
             }
         }
-        return best
+
+        // Hai hộp CẮT CHÉO nhau (chồng một phần, không cái nào chứa cái kia) thì
+        // không thể cùng là item thật — thường 1 cái là hộp ăn may ghép từ mép
+        // chữ thẳng hàng với viền thẻ. Giữ cái có viền rõ hơn.
+        let slack = px(1)
+        func contains(_ a: (l: Int, t: Int, r: Int, b: Int, score: Float),
+                      _ b: (l: Int, t: Int, r: Int, b: Int, score: Float)) -> Bool {
+            a.l <= b.l + slack && a.t <= b.t + slack && a.r >= b.r - slack && a.b >= b.b - slack
+        }
+        var kept: [(l: Int, t: Int, r: Int, b: Int, score: Float)] = []
+        for box in boxes.sorted(by: { $0.score > $1.score })
+        where kept.allSatisfy({ contains($0, box) || contains(box, $0) }) {
+            kept.append(box)
+        }
+        boxes = kept
+
+        // Xếp thành 1 chuỗi lồng nhau. Hộp sau chỉ nhỉnh hơn hộp trước bằng 1
+        // dải mỏng ở 1-2 phía (thanh tiêu đề / chân của thẻ), hoặc 1-2px quanh
+        // (viền kép) thì THAY luôn hộp trước — vẫn là cùng 1 item. Còn lề đều
+        // quanh (ảnh nằm trong bong bóng chat) là 2 item lồng nhau, giữ cả hai.
+        boxes.sort { ($0.r - $0.l) * ($0.b - $0.t) < ($1.r - $1.l) * ($1.b - $1.t) }
+        var chain: [(l: Int, t: Int, r: Int, b: Int, score: Float)] = []
+        var anchor = (w: 0, h: 0)       // cỡ hộp ĐẦU TIÊN của item đang xét, để thay liên tiếp không trôi dần ra item to hơn
+        for box in boxes {
+            let bw = box.r - box.l, bh = box.b - box.t
+            guard let last = chain.last else { chain.append(box); anchor = (bw, bh); continue }
+            guard contains(box, last) else { continue }
+            let grow = [last.l - box.l, last.t - box.t, box.r - last.r, box.b - last.b]
+            let shared = grow.filter { $0 <= slack }.count
+            if bw - anchor.w <= max(px(6), anchor.w / 8), bh - anchor.h <= max(px(6), anchor.h / 8),
+               shared >= 2 || grow.max()! <= px(2) {
+                chain[chain.count - 1] = box
+            } else {
+                chain.append(box)
+                anchor = (bw, bh)
+            }
+        }
+        return chain.map { CGRect(x: pt($0.l), y: pt($0.t), width: pt($0.r - $0.l), height: pt($0.b - $0.t)) }
+    }
+
+    /// Hộp bị 1 đường chạy gần hết bề ngang (hoặc dọc) cắt ngang khúc giữa, và
+    /// đường đó đậm ngang ngửa chính viền hộp → CHỒNG nhiều item cùng loại (2
+    /// dòng của 1 danh sách, 2 cột…), không phải 1 item. Đường cắt nhạt hơn hẳn
+    /// viền (lưới trong 1 tấm ảnh) hoặc sát mép (thanh tiêu đề) thì vẫn là 1 item.
+    private func isStack(l: Int, t: Int, r: Int, b: Int) -> Bool {
+        let hh = b - t, ww = r - l
+        let rowRef = min(rowStrength(t, l, r - 1), rowStrength(b, l, r - 1))
+        for y in (t + hh * 3 / 10)...(b - hh * 3 / 10)
+        where spans(hStart, hA, hB, at: y, from: l, to: r - 1) && rowStrength(y, l, r - 1) * 5 >= rowRef * 3 {
+            return true
+        }
+        let colRef = min(colStrength(l, t, b - 1), colStrength(r, t, b - 1))
+        for x in (l + ww * 3 / 10)...(r - ww * 3 / 10)
+        where spans(vStart, vA, vB, at: x, from: t, to: b - 1) && colStrength(x, t, b - 1) * 5 >= colRef * 3 {
+            return true
+        }
+        return false
+    }
+
+    /// Độ đậm trung bình của biên ngang `y` trên [x0, x1]. Mép màn hình (không
+    /// có pixel để đo) coi như đậm tối đa.
+    private func rowStrength(_ y: Int, _ x0: Int, _ x1: Int) -> Int {
+        guard y >= 1, y < h else { return 255 }
+        var sum = 0
+        for x in x0...x1 { sum += Int(hEdge[y * w + x]) }
+        return sum / (x1 - x0 + 1)
+    }
+
+    private func colStrength(_ x: Int, _ y0: Int, _ y1: Int) -> Int {
+        guard x >= 1, x < w else { return 255 }
+        var sum = 0
+        for y in y0...y1 { sum += Int(vEdge[y * w + x]) }
+        return sum / (y1 - y0 + 1)
+    }
+
+    /// Các đoạn đường ở hàng/cột `i` phủ ≥ 90% khoảng [lo, hi].
+    private func spans(_ start: [Int32], _ a: [Int32], _ b: [Int32], at i: Int, from lo: Int, to hi: Int) -> Bool {
+        guard i >= 1, i + 1 < start.count, hi > lo else { return false }
+        var covered = 0
+        for k in Int(start[i])..<Int(start[i + 1]) {
+            let s = max(lo, Int(a[k])), e = min(hi, Int(b[k]))
+            if e >= s { covered += e - s + 1 }
+        }
+        return covered * 10 >= (hi - lo + 1) * 9
+    }
+
+    /// Từ góc đi dọc biên DỌC `x` theo `step`, bao nhiêu pixel mới gặp biên
+    /// (góc vuông ≈ 0, góc bo ≈ bán kính). Không gặp trong `cap` → cap + 1.
+    private func vGap(x: Int, from y: Int, step: Int, cap: Int) -> Int {
+        guard x >= 1, x < w else { return cap + 1 }
+        var y = y
+        for k in 0...cap {
+            guard y >= 0, y < h else { break }
+            if vEdge[y * w + x] >= thr { return k }
+            y += step
+        }
+        return cap + 1
+    }
+
+    private func hGap(y: Int, from x: Int, step: Int, cap: Int) -> Int {
+        guard y >= 1, y < h else { return cap + 1 }
+        var x = x
+        for k in 0...cap {
+            guard x >= 0, x < w else { break }
+            if hEdge[y * w + x] >= thr { return k }
+            x += step
+        }
+        return cap + 1
     }
 
     private func columnPrefix(_ x: Int, y0: Int, y1: Int) -> [Int32] {

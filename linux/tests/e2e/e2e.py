@@ -770,7 +770,63 @@ def history(app, inp):
     log(f"history kinds: {kinds}")
 
 
-FEATURES = {"record": record, "scroll": scrolling, "text": capture_text, "history": history}
+def hover(app, inp):
+    # A white card on grey with a picture inside it: two nested items to hover.
+    page = HOME / "cards.png"
+    subprocess.run(["convert", "-size", "1280x800", "xc:#e6e6e6", "-fill", "white",
+                    "-draw", "roundrectangle 200,150 999,649 16,16",
+                    "(", "-size", "400x300", "gradient:#d04040-#3050c0", ")", "-geometry", "+300+250", "-composite",
+                    str(page)], check=True)
+    app.stop()
+    data = settings()
+    data["edit_after_select"] = False
+    data["snap"] = True
+    SETTINGS.write_text(json.dumps(data))
+    app = App()
+    time.sleep(2)
+    viewer = subprocess.Popen([sys.executable, str(pathlib.Path(__file__).with_name("page.py")), str(page)],
+                              stdout=subprocess.PIPE, text=True)
+    try:
+        assert viewer.stdout.readline().strip() == "ready"
+        time.sleep(1.5)
+        screen = portal_screenshot("70-hover-page")
+
+        def capture(name, wheel, rect):
+            opened = overlays_opened()
+            slopshot("area")
+            if not check(wait_overlay_opened(opened), f"{name}: the overlay opens"):
+                return None
+            inp.move(500, 400, steps=5)
+            time.sleep(0.3)
+            if wheel:
+                inp.wheel(wheel)
+                time.sleep(0.3)
+            portal_screenshot(f"{name}-hover")
+            inp.click(500, 400)
+            time.sleep(0.5)
+            portal_screenshot(f"{name}-adjust")
+            # The full-screen page keeps the keyboard, so the Capture button under the
+            # area's bottom-right corner rather than Return.
+            before = files(TEMP_DIR)
+            x, y, w, h = rect
+            inp.click(x + w - 52, y + h + 23)
+            saved = wait_new_file(TEMP_DIR, before)
+            return load_png(saved) if saved else None
+
+        picture = capture("71-picture", 0, (300, 250, 400, 300))
+        check(picture is not None and same_pixels(picture, screen[250:550, 300:700]),
+              f"clicking the hovered picture captures exactly it ({None if picture is None else picture.shape})")
+        card = capture("72-card", -1, (200, 150, 800, 500))
+        check(card is not None and same_pixels(card, screen[150:650, 200:1000]),
+              f"scrolling up grows the highlight to the card around it ({None if card is None else card.shape})")
+    finally:
+        viewer.terminate()
+        viewer.wait(5)
+        time.sleep(1.5)
+    return app
+
+
+FEATURES = {"hover": hover, "record": record, "scroll": scrolling, "text": capture_text, "history": history}
 
 
 if __name__ == "__main__":

@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 use gpui::{
     AnyElement, AnyWindowHandle, App, AppContext as _, Bounds, Context, CursorStyle, Entity,
     FocusHandle, Hsla, KeyDownEvent, KeyUpEvent, ModifiersChangedEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point, RenderImage, Size,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point, RenderImage, ScrollDelta,
+    ScrollWheelEvent, Size,
     Window, WindowBackgroundAppearance, WindowKind, WindowOptions, canvas, div, fill, point,
     prelude::*, px, size,
 };
@@ -200,6 +201,11 @@ struct Session {
     pointer: Option<(usize, P)>,
     selection: Option<(usize, R)>,
     hover: Option<(usize, R)>,
+    /// Nested boxes under the pointer, smallest first; the wheel moves between them.
+    levels: Vec<R>,
+    /// The level scrolled to, kept while the pointer stays inside it.
+    pinned: Option<R>,
+    scroll_acc: f32,
     /// Snapped left, top, right, bottom edges of the selection.
     snapped: [bool; 4],
     drag: Option<Drag>,
@@ -258,6 +264,9 @@ pub fn open_for(mode: Mode, purpose: Purpose, image: RgbaImage, cx: &mut App) {
         pointer: None,
         selection: None,
         hover: None,
+        levels: Vec::new(),
+        pinned: None,
+        scroll_acc: 0.,
         snapped: [false; 4],
         drag: None,
         adjust: false,
@@ -370,18 +379,35 @@ impl Session {
     }
 
     fn update_hover(&mut self, cx: &App) {
-        self.hover = None;
-        if self.mode != Mode::Area || self.selection.is_some() || self.drag.is_some() || self.inline.is_some() || !self.snap_on(cx) {
-            return;
+        let previous = self.hover.take();
+        let levels = self.find_levels(previous, cx);
+        if self.pinned.is_some_and(|r| !levels.contains(&r)) {
+            self.pinned = None;
         }
-        let Some((d, p)) = self.pointer else { return };
+        self.hover = self.pinned.or(levels.first().copied()).zip(self.pointer).map(|(r, (d, _))| (d, r));
+        self.levels = levels;
+    }
+
+    fn find_levels(&self, previous: Option<(usize, R)>, cx: &App) -> Vec<R> {
+        if self.mode != Mode::Area || self.selection.is_some() || self.drag.is_some() || self.inline.is_some() || !self.snap_on(cx) {
+            return Vec::new();
+        }
+        let Some((d, p)) = self.pointer else { return Vec::new() };
         let display = &self.displays[d];
-        let Some(engine) = &display.engine else { return };
+        let Some(engine) = &display.engine else { return Vec::new() };
         let full = display.full();
         let limit = RectF { x: full.x, y: full.y, w: full.w, h: full.h };
-        if let Some(found) = engine.element(p, limit) {
-            self.hover = Some((d, found.into()));
+        let mut levels: Vec<R> = engine.elements(p, limit).into_iter().map(R::from).collect();
+        // On the gap between items or a faint stretch of border, keep the last item
+        // so the highlight doesn't flicker off and back.
+        if levels.is_empty()
+            && let Some((pd, r)) = previous
+            && pd == d
+            && r.inset(-6.).contains(p)
+        {
+            levels.push(r);
         }
+        levels
     }
 
     /// Snaps the moving edges to pixel lines within 9 pt (SnapEngine.swift).
@@ -525,6 +551,31 @@ impl OverlayView {
             } else {
                 s.update_hover(cx);
             }
+            cx.notify();
+        });
+    }
+
+    /// Scrolling up picks the next bigger box around the pointer, down the smaller.
+    fn scroll_wheel(&mut self, e: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.session.update(cx, |s, cx| {
+            if s.adjust || s.drag.is_some() || s.levels.len() < 2 {
+                return;
+            }
+            let Some((d, current)) = s.hover else { return };
+            // A wheel notch (3 lines) is one step; a touchpad takes 24 px of travel.
+            s.scroll_acc += match e.delta {
+                ScrollDelta::Lines(l) => l.y * 8.,
+                ScrollDelta::Pixels(p) => f32::from(p.y),
+            };
+            let steps = (s.scroll_acc / 24.).trunc();
+            if steps == 0. {
+                return;
+            }
+            s.scroll_acc -= steps * 24.;
+            let at = s.levels.iter().position(|r| *r == current).unwrap_or(0) as i32;
+            let next = s.levels[(at + steps as i32).clamp(0, s.levels.len() as i32 - 1) as usize];
+            s.pinned = Some(next);
+            s.hover = Some((d, next));
             cx.notify();
         });
     }
@@ -1290,6 +1341,7 @@ impl Render for OverlayView {
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
             .on_mouse_down(MouseButton::Right, cx.listener(|this, _, _, cx| cancel(&this.session, cx)))
             .on_mouse_move(cx.listener(Self::mouse_move))
+            .on_scroll_wheel(cx.listener(Self::scroll_wheel))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
             .on_key_down(cx.listener(Self::key_down))
             .on_key_up(cx.listener(Self::key_up))
@@ -1322,7 +1374,7 @@ impl Render for OverlayView {
                 let (title, subtitle) = if snap_setting {
                     (
                         "Drag to capture · click a highlighted area · ⌥ free · esc",
-                        "click a highlighted area  ·  ⌥ free select  ·  ⇧ square  ·  hold space to move  ·  F full screen  ·  esc to cancel",
+                        "click a highlighted area  ·  scroll to grow / shrink it  ·  ⌥ free select  ·  ⇧ square  ·  hold space to move  ·  F full screen  ·  esc to cancel",
                     )
                 } else {
                     ("Drag to capture · esc to cancel", "⇧ square  ·  hold space to move  ·  F full screen  ·  esc to cancel")
