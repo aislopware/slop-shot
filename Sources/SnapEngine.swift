@@ -457,7 +457,13 @@ final class SnapEngine: @unchecked Sendable {
                     for (ri, R) in rights.enumerated() where R - L >= minSize {
                         let rj = lefts.count + ri
                         let fl = L == x0, fr = R == x1, ft = T == y0, fb = B == y1
-                        if fl, fr, ft, fb { continue }
+                        // Dải chạy suốt cửa sổ (2 cạnh đối nhau đều là mép cửa sổ)
+                        // chỉ là pane khi chiếm quá nửa chiều kia (bảng giữa toolbar
+                        // và status bar). Web đầy đường kẻ ngang chạy hết trang:
+                        // dải mỏng giữa 2 đường kẻ, hay 1 đường kẻ + 3 mép cửa sổ,
+                        // không phải item.
+                        if fl && fr && (ft || fb || (B - T) * 2 < y1 - y0) { continue }
+                        if ft && fb && (fl || fr || (R - L) * 2 < x1 - x0) { continue }
                         let corners = [corner(gapV[li][ti], gapH[ti][li], vFixed: fl, hFixed: ft),
                                        corner(gapV[rj][ti], gapH[ti][rj], vFixed: fr, hFixed: ft),
                                        corner(gapV[li][bj], gapH[bj][li], vFixed: fl, hFixed: fb),
@@ -480,8 +486,20 @@ final class SnapEngine: @unchecked Sendable {
                         // Ngưỡng đo trên ảnh thật: khung UI thật (nút, thẻ, panel)
                         // đạt min ≥ 0.85 / mean ≥ 0.91; còn "hộp" ăn may trong
                         // ảnh/artwork chỉ tầm min 0.67 / mean 0.77 → tách bạch rõ.
-                        let low = min(min(cL, cR), min(cT, cB)), mean = (cL + cR + cT + cB) / 4
-                        guard partial ? low >= 0.50 && mean >= 0.78 : low >= 0.80 && mean >= 0.86,
+                        let sides = [cL, cR, cT, cB].sorted()
+                        let low = sides[0], mean = (cL + cR + cT + cB) / 4
+                        // Ảnh có 1 mép tối trên nền tối (ảnh trong album chat): mép
+                        // đó đứt quãng (kéo lệch luôn 1 góc), nhưng 3 cạnh kia rõ nét.
+                        // Mép cửa sổ luôn phủ đủ nên không tính là bằng chứng ở đây.
+                        // Bên trong mà có đường chạy suốt song song với cạnh yếu (vạch
+                        // chia pane) thì đó mới là cạnh thật, cạnh yếu chỉ là cột
+                        // avatar/chữ thẳng hàng bên kia vạch.
+                        let weakSide = !(fl || fr || ft || fb) && missing == 0 && skewed <= 1
+                            && sides[1] >= 0.90 && low >= 0.50
+                            && (low == cL || low == cR
+                                ? !((L + 1)..<R).contains { spans(vStart, vA, vB, at: $0, from: T, to: B - 1) }
+                                : !((T + 1)..<B).contains { spans(hStart, hA, hB, at: $0, from: L, to: R - 1) })
+                        guard partial ? low >= 0.50 && mean >= 0.78 : low >= 0.80 && mean >= 0.86 || weakSide,
                               !isStack(l: L, t: T, r: R, b: B) else { continue }
                         boxes.append((L, T, R, B, mean - 0.05 * Float(skewed) - (partial ? 0.15 : 0)))
                     }

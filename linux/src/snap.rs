@@ -337,7 +337,12 @@ impl SnapEngine {
                         }
                         let rj = lefts.len() + ri;
                         let (fl, fr, ft, fb) = (l == x0, r == x1, t == y0, b == y1);
-                        if fl && fr && ft && fb {
+                        // A band spanning the window (both opposite sides are window
+                        // edges) is a pane only if it fills over half the other way,
+                        // like a table between a toolbar and a status bar. Web pages
+                        // are full of page-wide rules: a thin band between two of
+                        // them, or one rule plus three window edges, is no item.
+                        if fl && fr && (ft || fb || (b - t) * 2 < y1 - y0) || ft && fb && (fl || fr || (r - l) * 2 < x1 - x0) {
                             continue;
                         }
                         let corners = [
@@ -362,9 +367,27 @@ impl SnapEngine {
                         let c_b = side(fb, cov(&row_pre[bj], l, r - 1, x0, gap_h[bj][li], gap_h[bj][rj]));
                         // Real UI boxes measure min ≥ 0.85 / mean ≥ 0.91; chance boxes in
                         // photos about 0.67 / 0.77.
-                        let low = c_l.min(c_r).min(c_t.min(c_b));
+                        let mut sides = [c_l, c_r, c_t, c_b];
+                        sides.sort_by(f32::total_cmp);
+                        let low = sides[0];
                         let mean = (c_l + c_r + c_t + c_b) / 4.;
-                        let pass = if partial { low >= 0.50 && mean >= 0.78 } else { low >= 0.80 && mean >= 0.86 };
+                        // A photo with one dark edge on a dark background (an image in
+                        // a chat album): that edge breaks up (skewing a corner too) while
+                        // the other three stay crisp. Window edges always cover fully,
+                        // so they are no evidence here. A line running all along the
+                        // box parallel to the weak side (a pane divider) is the real
+                        // side; the weak one is just aligned avatars or text past it.
+                        let weak_side = !(fl || fr || ft || fb)
+                            && missing == 0
+                            && skewed <= 1
+                            && sides[1] >= 0.90
+                            && low >= 0.50
+                            && if low == c_l || low == c_r {
+                                !(l + 1..r).any(|x| spans(&self.v_start, &self.v_a, &self.v_b, x, t, b - 1))
+                            } else {
+                                !(t + 1..b).any(|y| spans(&self.h_start, &self.h_a, &self.h_b, y, l, r - 1))
+                            };
+                        let pass = if partial { low >= 0.50 && mean >= 0.78 } else { low >= 0.80 && mean >= 0.86 || weak_side };
                         if !pass || self.is_stack(l, t, r, b) {
                             continue;
                         }
