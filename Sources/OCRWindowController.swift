@@ -15,9 +15,13 @@ final class OCRWindowController {
 
         let view = OCRResultView(result: result, image: image)
         let host = NSHostingController(rootView: view)
-        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 620),
-                           styleMask: [.titled, .closable, .resizable],
-                           backing: .buffered, defer: false)
+        // Panel non-activating: thành key window ngay cả khi macOS từ chối activate
+        // app (mở ngay sau phím tắt). NSWindow thường thì nằm đó nhưng không key →
+        // cú kéo chuột đầu tiên chỉ để kích hoạt cửa sổ, bôi đen chữ không ăn.
+        let win = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 960, height: 620),
+                          styleMask: [.titled, .closable, .resizable, .nonactivatingPanel],
+                          backing: .buffered, defer: false)
+        win.hidesOnDeactivate = false
         win.title = result.qrCodes.isEmpty ? "Text Recognition" : "Text & QR Recognition"
         win.titlebarAppearsTransparent = true      // nối liền với thanh công cụ bên dưới
         win.contentViewController = host
@@ -37,9 +41,8 @@ final class OCRWindowController {
             }
         }
         self.window = win
-        // Mở ngay sau phím tắt → macOS thường từ chối activate, cửa sổ sẽ nằm
-        // sau app đang dùng. presentInFront lo chuyện đó.
-        win.presentInFront()
+        win.makeKeyAndOrderFront(nil)
+        win.orderFrontRegardless()
     }
 
     private var closeObserver: NSObjectProtocol?
