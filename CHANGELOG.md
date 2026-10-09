@@ -4,6 +4,12 @@ Sinh từ commit log bằng [git-cliff](https://git-cliff.org). Mục nào nằm
 loại (type) của commit quyết định — tức quyết định lúc VIẾT commit, không phải lúc cắt
 release. Quy ước được `scripts/check-commit-msg.sh` chặn ngay ở hook commit-msg.
 
+## [0.9.6](https://github.com/aislopware/slop-shot/compare/v0.9.5...v0.9.6) — 2026-10-09
+
+### Bug fixes
+
+- Paste screenshots into Slack as images, not files ([`13e1679`](https://github.com/aislopware/slop-shot/commit/13e1679be2e554febee3676ca63aeaf02d0eb8ae))
+
 ## [0.9.5](https://github.com/aislopware/slop-shot/compare/v0.9.4...v0.9.5) — 2026-10-08
 
 ### Bug fixes
