@@ -2119,18 +2119,18 @@ mod display_mode_tests {
 /// paste the pixels, file managers paste the file.
 /// A lone string tagged with the `"text/uri-list"` JSON metadata is a file copied on
 /// its own (a recording), served only as a file.
-pub(crate) fn image_file_uri(item: &gpui::ClipboardItem) -> Option<String> {
+fn file_uri(item: &gpui::ClipboardItem) -> Option<(String, bool)> {
     let entries = item.entries();
     if let [gpui::ClipboardEntry::String(s)] = entries
         && s.metadata.as_deref() == Some(FILE_ONLY_METADATA)
     {
-        return Some(s.text().clone());
+        return Some((s.text().clone(), false));
     }
     if !entries.iter().any(|e| matches!(e, gpui::ClipboardEntry::Image(_))) {
         return None;
     }
     entries.iter().find_map(|e| match e {
-        gpui::ClipboardEntry::String(s) => Some(s.text().clone()),
+        gpui::ClipboardEntry::String(s) => Some((s.text().clone(), true)),
         _ => None,
     })
 }
@@ -2139,11 +2139,15 @@ pub(crate) const URI_LIST_MIME_TYPE: &str = "text/uri-list";
 pub(crate) const FILE_ONLY_METADATA: &str = "\"text/uri-list\"";
 pub(crate) const GNOME_COPIED_FILES_MIME_TYPE: &str = "x-special/gnome-copied-files";
 
-/// What to serve for one of the file mime types, if `mime_type` is one.
-pub(crate) fn file_payload(uri: &str, mime_type: &str) -> Option<Vec<u8>> {
-    match mime_type {
-        URI_LIST_MIME_TYPE => Some(format!("{uri}\r\n").into_bytes()),
-        GNOME_COPIED_FILES_MIME_TYPE => Some(format!("copy\n{uri}").into_bytes()),
-        _ => None,
+/// The file side of `item` as (mime type, payload) pairs. Next to an image only
+/// `x-special/gnome-copied-files` is offered: Chromium (Slack, Discord, browsers) pastes
+/// a `text/uri-list` file instead of the pixels, and a snap or flatpak can't read our
+/// /tmp, so the paste fails. GNOME Files reads `x-special/gnome-copied-files`.
+pub(crate) fn file_entries(item: &gpui::ClipboardItem) -> Vec<(&'static str, Vec<u8>)> {
+    let Some((uri, with_image)) = file_uri(item) else { return Vec::new() };
+    let mut entries = vec![(GNOME_COPIED_FILES_MIME_TYPE, format!("copy\n{uri}").into_bytes())];
+    if !with_image {
+        entries.push((URI_LIST_MIME_TYPE, format!("{uri}\r\n").into_bytes()));
     }
+    entries
 }

@@ -1010,7 +1010,7 @@ impl Clipboard {
     }
 
     /// slopshot patch: images in their own formats, plus the file for an image copied
-    /// with its URI (see `image_file_uri`).
+    /// with its URI (see `file_entries`).
     pub(crate) fn set_image_entries(
         &self,
         item: &ClipboardItem,
@@ -1028,15 +1028,13 @@ impl Clipboard {
                 _ => None,
             })
             .collect();
-        if let Some(uri) = crate::linux::platform::image_file_uri(item) {
-            for (atom, mime) in [
-                (self.inner.atoms.URI_LIST, crate::linux::platform::URI_LIST_MIME_TYPE),
-                (self.inner.atoms.GNOME_COPIED_FILES, crate::linux::platform::GNOME_COPIED_FILES_MIME_TYPE),
-            ] {
-                if let Some(bytes) = crate::linux::platform::file_payload(&uri, mime) {
-                    data.push(ClipboardData { bytes, format: atom });
-                }
-            }
+        for (mime, bytes) in crate::linux::platform::file_entries(item) {
+            let format = if mime == crate::linux::platform::URI_LIST_MIME_TYPE {
+                self.inner.atoms.URI_LIST
+            } else {
+                self.inner.atoms.GNOME_COPIED_FILES
+            };
+            data.push(ClipboardData { bytes, format });
         }
         self.inner.write(data, selection, wait)
     }

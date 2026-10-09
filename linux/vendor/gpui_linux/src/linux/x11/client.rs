@@ -1838,7 +1838,7 @@ impl X11Client {
 
     pub(crate) fn write_to_clipboard(&self, item: gpui::ClipboardItem) {
         let mut state = self.0.borrow_mut();
-        if crate::linux::platform::image_file_uri(&item).is_some()
+        if !crate::linux::platform::file_entries(&item).is_empty()
             || item.entries().iter().any(|e| matches!(e, gpui::ClipboardEntry::Image(_)))
         {
             state

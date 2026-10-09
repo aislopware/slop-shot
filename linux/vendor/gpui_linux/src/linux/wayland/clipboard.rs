@@ -175,11 +175,11 @@ impl Clipboard {
     }
 
     pub fn send(&self, mime_type: String, fd: OwnedFd) {
-        if let Some(bytes) = self
+        if let Some((_, bytes)) = self
             .contents
-            .as_ref()
-            .and_then(crate::linux::platform::image_file_uri)
-            .and_then(|uri| crate::linux::platform::file_payload(&uri, &mime_type))
+            .iter()
+            .flat_map(crate::linux::platform::file_entries)
+            .find(|(mime, _)| *mime == mime_type)
         {
             self.send_bytes(fd, bytes);
             return;
@@ -212,9 +212,10 @@ impl Clipboard {
                 _ => None,
             })
             .collect();
-        if self.contents.as_ref().and_then(crate::linux::platform::image_file_uri).is_some() {
-            types.push(crate::linux::platform::URI_LIST_MIME_TYPE.to_string());
-            types.push(crate::linux::platform::GNOME_COPIED_FILES_MIME_TYPE.to_string());
+        let files = self.contents.iter().flat_map(crate::linux::platform::file_entries);
+        let files: Vec<String> = files.map(|(mime, _)| mime.to_string()).collect();
+        if !files.is_empty() {
+            types.extend(files);
         } else if self.contents.as_ref().is_some_and(|contents| contents.text().is_some()) {
             types.extend(TEXT_MIME_TYPES.iter().map(|t| t.to_string()));
         }

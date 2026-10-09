@@ -8,8 +8,10 @@ through its `[patch."https://github.com/aislopware/gpui-fast.git"]`. The changes
    Upstream only ever offers text mime types when writing the clipboard, so an image
    `ClipboardItem` reaches no other app. The data source now offers the mime type of every
    image entry and `send` answers those requests with the image bytes. An image followed
-   by a `file://` string also offers `text/uri-list`; a lone string tagged with the
-   `"text/uri-list"` JSON metadata is offered only as a file (copying a recording).
+   by a `file://` string also offers `x-special/gnome-copied-files` (not `text/uri-list`,
+   which Chromium apps such as Slack paste as a file instead of the pixels); a lone string
+   tagged with the `"text/uri-list"` JSON metadata is offered only as a file, in both
+   types (copying a recording).
 2. **Fullscreen on a chosen output** (`src/linux/wayland/window.rs`).
    A `WindowKind::PopUp` opened with a `display_id` calls `xdg_toplevel.set_fullscreen(output)`
    before its first commit. xdg-shell gives a client no other way to place a window on a

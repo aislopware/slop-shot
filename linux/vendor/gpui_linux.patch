@@ -1,8 +1,8 @@
 diff --git a/src/linux/platform.rs b/src/linux/platform.rs
-index 5aa9310..2b9eb40 100644
+index 5aa9310..d799140 100644
 --- a/src/linux/platform.rs
 +++ b/src/linux/platform.rs
-@@ -2113,3 +2113,37 @@ mod display_mode_tests {
+@@ -2113,3 +2113,41 @@ mod display_mode_tests {
          );
      }
  }
@@ -12,18 +12,18 @@ index 5aa9310..2b9eb40 100644
 +/// paste the pixels, file managers paste the file.
 +/// A lone string tagged with the `"text/uri-list"` JSON metadata is a file copied on
 +/// its own (a recording), served only as a file.
-+pub(crate) fn image_file_uri(item: &gpui::ClipboardItem) -> Option<String> {
++fn file_uri(item: &gpui::ClipboardItem) -> Option<(String, bool)> {
 +    let entries = item.entries();
 +    if let [gpui::ClipboardEntry::String(s)] = entries
 +        && s.metadata.as_deref() == Some(FILE_ONLY_METADATA)
 +    {
-+        return Some(s.text().clone());
++        return Some((s.text().clone(), false));
 +    }
 +    if !entries.iter().any(|e| matches!(e, gpui::ClipboardEntry::Image(_))) {
 +        return None;
 +    }
 +    entries.iter().find_map(|e| match e {
-+        gpui::ClipboardEntry::String(s) => Some(s.text().clone()),
++        gpui::ClipboardEntry::String(s) => Some((s.text().clone(), true)),
 +        _ => None,
 +    })
 +}
@@ -32,13 +32,17 @@ index 5aa9310..2b9eb40 100644
 +pub(crate) const FILE_ONLY_METADATA: &str = "\"text/uri-list\"";
 +pub(crate) const GNOME_COPIED_FILES_MIME_TYPE: &str = "x-special/gnome-copied-files";
 +
-+/// What to serve for one of the file mime types, if `mime_type` is one.
-+pub(crate) fn file_payload(uri: &str, mime_type: &str) -> Option<Vec<u8>> {
-+    match mime_type {
-+        URI_LIST_MIME_TYPE => Some(format!("{uri}\r\n").into_bytes()),
-+        GNOME_COPIED_FILES_MIME_TYPE => Some(format!("copy\n{uri}").into_bytes()),
-+        _ => None,
++/// The file side of `item` as (mime type, payload) pairs. Next to an image only
++/// `x-special/gnome-copied-files` is offered: Chromium (Slack, Discord, browsers) pastes
++/// a `text/uri-list` file instead of the pixels, and a snap or flatpak can't read our
++/// /tmp, so the paste fails. GNOME Files reads `x-special/gnome-copied-files`.
++pub(crate) fn file_entries(item: &gpui::ClipboardItem) -> Vec<(&'static str, Vec<u8>)> {
++    let Some((uri, with_image)) = file_uri(item) else { return Vec::new() };
++    let mut entries = vec![(GNOME_COPIED_FILES_MIME_TYPE, format!("copy\n{uri}").into_bytes())];
++    if !with_image {
++        entries.push((URI_LIST_MIME_TYPE, format!("{uri}\r\n").into_bytes()));
 +    }
++    entries
 +}
 diff --git a/src/linux/wayland/client.rs b/src/linux/wayland/client.rs
 index 1416c47..2ca0f3c 100644
@@ -56,20 +60,20 @@ index 1416c47..2ca0f3c 100644
              data_source.offer(state.clipboard.self_mime());
              data_device.set_selection(Some(&data_source), serial.as_raw());
 diff --git a/src/linux/wayland/clipboard.rs b/src/linux/wayland/clipboard.rs
-index 86dc7da..b6444f5 100644
+index 86dc7da..d8879df 100644
 --- a/src/linux/wayland/clipboard.rs
 +++ b/src/linux/wayland/clipboard.rs
-@@ -174,12 +174,53 @@ impl Clipboard {
+@@ -174,12 +174,54 @@ impl Clipboard {
          self.self_mime.clone()
      }
  
 -    pub fn send(&self, _mime_type: String, fd: OwnedFd) {
 +    pub fn send(&self, mime_type: String, fd: OwnedFd) {
-+        if let Some(bytes) = self
++        if let Some((_, bytes)) = self
 +            .contents
-+            .as_ref()
-+            .and_then(crate::linux::platform::image_file_uri)
-+            .and_then(|uri| crate::linux::platform::file_payload(&uri, &mime_type))
++            .iter()
++            .flat_map(crate::linux::platform::file_entries)
++            .find(|(mime, _)| *mime == mime_type)
 +        {
 +            self.send_bytes(fd, bytes);
 +            return;
@@ -102,9 +106,10 @@ index 86dc7da..b6444f5 100644
 +                _ => None,
 +            })
 +            .collect();
-+        if self.contents.as_ref().and_then(crate::linux::platform::image_file_uri).is_some() {
-+            types.push(crate::linux::platform::URI_LIST_MIME_TYPE.to_string());
-+            types.push(crate::linux::platform::GNOME_COPIED_FILES_MIME_TYPE.to_string());
++        let files = self.contents.iter().flat_map(crate::linux::platform::file_entries);
++        let files: Vec<String> = files.map(|(mime, _)| mime.to_string()).collect();
++        if !files.is_empty() {
++            types.extend(files);
 +        } else if self.contents.as_ref().is_some_and(|contents| contents.text().is_some()) {
 +            types.extend(TEXT_MIME_TYPES.iter().map(|t| t.to_string()));
 +        }
@@ -134,7 +139,7 @@ index be447f8..42ffbe0 100644
              let dialog = globals.dialog.as_ref().map(|dialog| {
                  let xdg_dialog = dialog.get_xdg_dialog(&toplevel, &globals.qh, ());
 diff --git a/src/linux/x11/client.rs b/src/linux/x11/client.rs
-index df3d304..093ae39 100644
+index df3d304..cdd44f7 100644
 --- a/src/linux/x11/client.rs
 +++ b/src/linux/x11/client.rs
 @@ -1838,15 +1838,25 @@ impl X11Client {
@@ -150,7 +155,7 @@ index df3d304..093ae39 100644
 -            )
 -            .context("X11: Failed to write to clipboard (clipboard)")
 -            .log_with_level(log::Level::Debug);
-+        if crate::linux::platform::image_file_uri(&item).is_some()
++        if !crate::linux::platform::file_entries(&item).is_empty()
 +            || item.entries().iter().any(|e| matches!(e, gpui::ClipboardEntry::Image(_)))
 +        {
 +            state
@@ -173,7 +178,7 @@ index df3d304..093ae39 100644
      }
  
 diff --git a/src/linux/x11/clipboard.rs b/src/linux/x11/clipboard.rs
-index 9835786..f11fc61 100644
+index 9835786..7523d75 100644
 --- a/src/linux/x11/clipboard.rs
 +++ b/src/linux/x11/clipboard.rs
 @@ -78,7 +78,8 @@ x11rb::atom_manager! {
@@ -186,12 +191,12 @@ index 9835786..f11fc61 100644
  
          PNG__MIME: ImageFormat::mime_type(ImageFormat::Png ).as_bytes(),
          JPEG_MIME: ImageFormat::mime_type(ImageFormat::Jpeg).as_bytes(),
-@@ -1008,6 +1009,38 @@ impl Clipboard {
+@@ -1008,6 +1009,36 @@ impl Clipboard {
          }
      }
  
 +    /// slopshot patch: images in their own formats, plus the file for an image copied
-+    /// with its URI (see `image_file_uri`).
++    /// with its URI (see `file_entries`).
 +    pub(crate) fn set_image_entries(
 +        &self,
 +        item: &ClipboardItem,
@@ -209,15 +214,13 @@ index 9835786..f11fc61 100644
 +                _ => None,
 +            })
 +            .collect();
-+        if let Some(uri) = crate::linux::platform::image_file_uri(item) {
-+            for (atom, mime) in [
-+                (self.inner.atoms.URI_LIST, crate::linux::platform::URI_LIST_MIME_TYPE),
-+                (self.inner.atoms.GNOME_COPIED_FILES, crate::linux::platform::GNOME_COPIED_FILES_MIME_TYPE),
-+            ] {
-+                if let Some(bytes) = crate::linux::platform::file_payload(&uri, mime) {
-+                    data.push(ClipboardData { bytes, format: atom });
-+                }
-+            }
++        for (mime, bytes) in crate::linux::platform::file_entries(item) {
++            let format = if mime == crate::linux::platform::URI_LIST_MIME_TYPE {
++                self.inner.atoms.URI_LIST
++            } else {
++                self.inner.atoms.GNOME_COPIED_FILES
++            };
++            data.push(ClipboardData { bytes, format });
 +        }
 +        self.inner.write(data, selection, wait)
 +    }
