@@ -472,7 +472,7 @@ def run(app, inp):
     check("text/uri-list" not in types, f"the image isn't offered as a uri-list file ({types})")
     gnome_files = (clipboard("x-special/gnome-copied-files") or b"").decode()
     if temp:
-        check(gnome_files == f"copy\n{temp.as_uri()}", f"file managers get the temp file ({gnome_files!r})")
+        check(gnome_files == f"copy\n{pathlib.Path(temp).as_uri()}", f"file managers get the temp file ({gnome_files!r})")
     if check(pasted is not None, "inline Copy put an image on the clipboard"):
         check(pasted.shape[:2] == (300, 400), f"inline capture is 400x300 ({pasted.shape[1]}x{pasted.shape[0]})")
         if pasted.shape[:2] == (300, 400):
