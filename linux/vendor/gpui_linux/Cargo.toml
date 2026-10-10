@@ -97,7 +97,7 @@ version = "1"
 
 [target."cfg(any(target_os = \"linux\", target_os = \"freebsd\"))".dependencies.collections]
 git = "https://github.com/aislopware/gpui-fast.git"
-rev = "877651fa3665806217c94107356d3c7a34299ebe"
+rev = "dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 version = "0.1.0"
 
 [target."cfg(any(target_os = \"linux\", target_os = \"freebsd\"))".dependencies.futures]
@@ -105,16 +105,16 @@ version = "0.3.34"
 
 [target."cfg(any(target_os = \"linux\", target_os = \"freebsd\"))".dependencies.gpui]
 git = "https://github.com/aislopware/gpui-fast.git"
-rev = "877651fa3665806217c94107356d3c7a34299ebe"
+rev = "dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 default-features = false
 
 [target."cfg(any(target_os = \"linux\", target_os = \"freebsd\"))".dependencies.gpui_util]
 git = "https://github.com/aislopware/gpui-fast.git"
-rev = "877651fa3665806217c94107356d3c7a34299ebe"
+rev = "dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 
 [target."cfg(any(target_os = \"linux\", target_os = \"freebsd\"))".dependencies.gpui_wgpu]
 git = "https://github.com/aislopware/gpui-fast.git"
-rev = "877651fa3665806217c94107356d3c7a34299ebe"
+rev = "dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 optional = true
 features = [
     "font-kit",
@@ -122,7 +122,7 @@ features = [
 
 [target."cfg(any(target_os = \"linux\", target_os = \"freebsd\"))".dependencies.http_client]
 git = "https://github.com/aislopware/gpui-fast.git"
-rev = "877651fa3665806217c94107356d3c7a34299ebe"
+rev = "dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 
 [target."cfg(any(target_os = \"linux\", target_os = \"freebsd\"))".dependencies.libc]
 version = "0.2"
@@ -284,7 +284,7 @@ optional = true
 
 [target."cfg(any(target_os = \"linux\", target_os = \"freebsd\"))".dev-dependencies.gpui]
 git = "https://github.com/aislopware/gpui-fast.git"
-rev = "877651fa3665806217c94107356d3c7a34299ebe"
+rev = "dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 default-features = false
 features = [
     "test-support",

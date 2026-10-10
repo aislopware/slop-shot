@@ -72,10 +72,10 @@ assets = [
 ]
 
 [patch.crates-io]
-gpui-pre = { git = "https://github.com/aislopware/gpui-fast.git", rev = "877651fa3665806217c94107356d3c7a34299ebe" }
-gpui-pre-platform = { git = "https://github.com/aislopware/gpui-fast.git", rev = "877651fa3665806217c94107356d3c7a34299ebe" }
-gpui-pre-macros = { git = "https://github.com/aislopware/gpui-fast.git", rev = "877651fa3665806217c94107356d3c7a34299ebe" }
-gpui-pre-sum-tree = { git = "https://github.com/aislopware/gpui-fast.git", rev = "877651fa3665806217c94107356d3c7a34299ebe" }
+gpui-pre = { git = "https://github.com/aislopware/gpui-fast.git", rev = "dc3602e3af56edb1dbbc9211856d4159c1aaff8f" }
+gpui-pre-platform = { git = "https://github.com/aislopware/gpui-fast.git", rev = "dc3602e3af56edb1dbbc9211856d4159c1aaff8f" }
+gpui-pre-macros = { git = "https://github.com/aislopware/gpui-fast.git", rev = "dc3602e3af56edb1dbbc9211856d4159c1aaff8f" }
+gpui-pre-sum-tree = { git = "https://github.com/aislopware/gpui-fast.git", rev = "dc3602e3af56edb1dbbc9211856d4159c1aaff8f" }
 
 [patch."https://github.com/aislopware/gpui-fast.git"]
 # Wayland/X11 image clipboard, per-output fullscreen, exact X11 popups; see vendor/gpui_linux/PATCHES.md.

@@ -704,6 +704,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6bb31b46c14244e20ee9984b11bf5c992b91fb6939fea616e3512c8baecdbe5f"
 dependencies = [
  "memchr",
+ "regex-automata",
  "serde_core",
 ]
 
@@ -951,7 +952,7 @@ dependencies = [
 [[package]]
 name = "collections"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast.git?rev=877651fa3665806217c94107356d3c7a34299ebe#877651fa3665806217c94107356d3c7a34299ebe"
+source = "git+https://github.com/aislopware/gpui-fast.git?rev=dc3602e3af56edb1dbbc9211856d4159c1aaff8f#dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 dependencies = [
  "gpui_util",
  "indexmap",
@@ -1350,7 +1351,7 @@ dependencies = [
 [[package]]
 name = "derive_refineable"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast.git?rev=877651fa3665806217c94107356d3c7a34299ebe#877651fa3665806217c94107356d3c7a34299ebe"
+source = "git+https://github.com/aislopware/gpui-fast.git?rev=dc3602e3af56edb1dbbc9211856d4159c1aaff8f#dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2295,7 +2296,7 @@ dependencies = [
 [[package]]
 name = "gpui"
 version = "0.2.2"
-source = "git+https://github.com/aislopware/gpui-fast.git?rev=877651fa3665806217c94107356d3c7a34299ebe#877651fa3665806217c94107356d3c7a34299ebe"
+source = "git+https://github.com/aislopware/gpui-fast.git?rev=dc3602e3af56edb1dbbc9211856d4159c1aaff8f#dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -2305,7 +2306,6 @@ dependencies = [
  "bitflags 2.13.2",
  "chrono",
  "collections",
- "core-video",
  "ctor",
  "derive_more",
  "embed-resource",
@@ -2325,6 +2325,8 @@ dependencies = [
  "log",
  "lyon",
  "num_cpus",
+ "objc2-core-foundation",
+ "objc2-core-video",
  "parking",
  "parking_lot",
  "pin-project",
@@ -2359,7 +2361,7 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.7.1"
-source = "git+https://github.com/aislopware/gpui-kit.git#20ea5a8dec653263386fb97b955aaa2c8706bcf8"
+source = "git+https://github.com/aislopware/gpui-kit.git#a7378632b8cd630aab78d3d49df6f0c853aa579e"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -2400,7 +2402,7 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.7.1"
-source = "git+https://github.com/aislopware/gpui-kit.git#20ea5a8dec653263386fb97b955aaa2c8706bcf8"
+source = "git+https://github.com/aislopware/gpui-kit.git#a7378632b8cd630aab78d3d49df6f0c853aa579e"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2433,9 +2435,12 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_repr",
+ "similar",
  "smallvec",
  "smol",
  "tracing",
+ "unicode-segmentation",
+ "unicode-width",
  "uuid",
  "windows 0.58.0",
 ]
@@ -2443,7 +2448,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-macros"
 version = "0.7.1"
-source = "git+https://github.com/aislopware/gpui-kit.git#20ea5a8dec653263386fb97b955aaa2c8706bcf8"
+source = "git+https://github.com/aislopware/gpui-kit.git#a7378632b8cd630aab78d3d49df6f0c853aa579e"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -2454,7 +2459,7 @@ dependencies = [
 [[package]]
 name = "gpui-kit-assets"
 version = "0.7.1"
-source = "git+https://github.com/aislopware/gpui-kit.git#20ea5a8dec653263386fb97b955aaa2c8706bcf8"
+source = "git+https://github.com/aislopware/gpui-kit.git#a7378632b8cd630aab78d3d49df6f0c853aa579e"
 dependencies = [
  "anyhow",
  "gpui-pre",
@@ -2468,7 +2473,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre"
 version = "0.3.8"
-source = "git+https://github.com/aislopware/gpui-fast.git?rev=877651fa3665806217c94107356d3c7a34299ebe#877651fa3665806217c94107356d3c7a34299ebe"
+source = "git+https://github.com/aislopware/gpui-fast.git?rev=dc3602e3af56edb1dbbc9211856d4159c1aaff8f#dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 dependencies = [
  "gpui",
 ]
@@ -2476,7 +2481,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-macros"
 version = "0.3.8"
-source = "git+https://github.com/aislopware/gpui-fast.git?rev=877651fa3665806217c94107356d3c7a34299ebe#877651fa3665806217c94107356d3c7a34299ebe"
+source = "git+https://github.com/aislopware/gpui-fast.git?rev=dc3602e3af56edb1dbbc9211856d4159c1aaff8f#dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 dependencies = [
  "gpui_macros",
 ]
@@ -2484,7 +2489,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-platform"
 version = "0.3.8"
-source = "git+https://github.com/aislopware/gpui-fast.git?rev=877651fa3665806217c94107356d3c7a34299ebe#877651fa3665806217c94107356d3c7a34299ebe"
+source = "git+https://github.com/aislopware/gpui-fast.git?rev=dc3602e3af56edb1dbbc9211856d4159c1aaff8f#dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 dependencies = [
  "gpui",
  "gpui_platform",
@@ -2543,7 +2548,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-sum-tree"
 version = "0.3.8"
-source = "git+https://github.com/aislopware/gpui-fast.git?rev=877651fa3665806217c94107356d3c7a34299ebe#877651fa3665806217c94107356d3c7a34299ebe"
+source = "git+https://github.com/aislopware/gpui-fast.git?rev=dc3602e3af56edb1dbbc9211856d4159c1aaff8f#dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 dependencies = [
  "sum_tree",
 ]
@@ -2551,7 +2556,7 @@ dependencies = [
 [[package]]
 name = "gpui_apple"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast.git?rev=877651fa3665806217c94107356d3c7a34299ebe#877651fa3665806217c94107356d3c7a34299ebe"
+source = "git+https://github.com/aislopware/gpui-fast.git?rev=dc3602e3af56edb1dbbc9211856d4159c1aaff8f#dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 dependencies = [
  "anyhow",
  "async-task",
@@ -2559,12 +2564,14 @@ dependencies = [
  "cbindgen",
  "collections",
  "core-foundation 0.10.1",
+ "core-foundation-sys",
  "core-graphics 0.24.0",
  "core-video",
  "derive_more",
  "dispatch2",
  "etagere",
  "foreign-types",
+ "futures",
  "gpui",
  "gpui_util",
  "image",
@@ -2573,15 +2580,21 @@ dependencies = [
  "mach2",
  "metal",
  "objc2 0.6.5",
+ "objc2-core-foundation",
+ "objc2-core-video",
  "objc2-foundation 0.3.2",
+ "objc2-metal 0.3.2",
  "objc2-quartz-core 0.3.2",
+ "objc2-security",
  "parking_lot",
+ "smallvec",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "gpui_ios"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast.git?rev=877651fa3665806217c94107356d3c7a34299ebe#877651fa3665806217c94107356d3c7a34299ebe"
+source = "git+https://github.com/aislopware/gpui-fast.git?rev=dc3602e3af56edb1dbbc9211856d4159c1aaff8f#dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -2657,7 +2670,7 @@ dependencies = [
 [[package]]
 name = "gpui_macos"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast.git?rev=877651fa3665806217c94107356d3c7a34299ebe#877651fa3665806217c94107356d3c7a34299ebe"
+source = "git+https://github.com/aislopware/gpui-fast.git?rev=dc3602e3af56edb1dbbc9211856d4159c1aaff8f#dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -2668,7 +2681,6 @@ dependencies = [
  "core-foundation 0.10.1",
  "core-foundation-sys",
  "core-graphics 0.24.0",
- "core-video",
  "ctor",
  "dispatch2",
  "foreign-types",
@@ -2684,6 +2696,7 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "objc2-core-foundation",
  "objc2-core-graphics",
+ "objc2-core-video",
  "objc2-foundation 0.3.2",
  "objc2-user-notifications",
  "parking_lot",
@@ -2698,7 +2711,7 @@ dependencies = [
 [[package]]
 name = "gpui_macros"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast.git?rev=877651fa3665806217c94107356d3c7a34299ebe#877651fa3665806217c94107356d3c7a34299ebe"
+source = "git+https://github.com/aislopware/gpui-fast.git?rev=dc3602e3af56edb1dbbc9211856d4159c1aaff8f#dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -2709,7 +2722,7 @@ dependencies = [
 [[package]]
 name = "gpui_platform"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast.git?rev=877651fa3665806217c94107356d3c7a34299ebe#877651fa3665806217c94107356d3c7a34299ebe"
+source = "git+https://github.com/aislopware/gpui-fast.git?rev=dc3602e3af56edb1dbbc9211856d4159c1aaff8f#dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -2724,7 +2737,7 @@ dependencies = [
 [[package]]
 name = "gpui_shared_string"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast.git?rev=877651fa3665806217c94107356d3c7a34299ebe#877651fa3665806217c94107356d3c7a34299ebe"
+source = "git+https://github.com/aislopware/gpui-fast.git?rev=dc3602e3af56edb1dbbc9211856d4159c1aaff8f#dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 dependencies = [
  "schemars",
  "serde",
@@ -2734,7 +2747,7 @@ dependencies = [
 [[package]]
 name = "gpui_util"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast.git?rev=877651fa3665806217c94107356d3c7a34299ebe#877651fa3665806217c94107356d3c7a34299ebe"
+source = "git+https://github.com/aislopware/gpui-fast.git?rev=dc3602e3af56edb1dbbc9211856d4159c1aaff8f#dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 dependencies = [
  "anyhow",
  "log",
@@ -2744,9 +2757,10 @@ dependencies = [
 [[package]]
 name = "gpui_web"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast.git?rev=877651fa3665806217c94107356d3c7a34299ebe#877651fa3665806217c94107356d3c7a34299ebe"
+source = "git+https://github.com/aislopware/gpui-fast.git?rev=dc3602e3af56edb1dbbc9211856d4159c1aaff8f#dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 dependencies = [
  "anyhow",
+ "async-channel",
  "console_error_panic_hook",
  "futures",
  "gpui",
@@ -2772,7 +2786,7 @@ dependencies = [
 [[package]]
 name = "gpui_wgpu"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast.git?rev=877651fa3665806217c94107356d3c7a34299ebe#877651fa3665806217c94107356d3c7a34299ebe"
+source = "git+https://github.com/aislopware/gpui-fast.git?rev=dc3602e3af56edb1dbbc9211856d4159c1aaff8f#dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -2798,7 +2812,7 @@ dependencies = [
 [[package]]
 name = "gpui_windows"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast.git?rev=877651fa3665806217c94107356d3c7a34299ebe#877651fa3665806217c94107356d3c7a34299ebe"
+source = "git+https://github.com/aislopware/gpui-fast.git?rev=dc3602e3af56edb1dbbc9211856d4159c1aaff8f#dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -3212,7 +3226,7 @@ dependencies = [
 [[package]]
 name = "http_client"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast.git?rev=877651fa3665806217c94107356d3c7a34299ebe#877651fa3665806217c94107356d3c7a34299ebe"
+source = "git+https://github.com/aislopware/gpui-fast.git?rev=dc3602e3af56edb1dbbc9211856d4159c1aaff8f#dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 dependencies = [
  "anyhow",
  "bytes",
@@ -4684,6 +4698,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-io-surface",
+ "objc2-metal 0.3.2",
 ]
 
 [[package]]
@@ -4776,6 +4791,15 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-foundation 0.3.2",
  "objc2-metal 0.3.2",
+]
+
+[[package]]
+name = "objc2-security"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "709fe137109bd1e8b5a99390f77a7d8b2961dafc1a1c5db8f2e60329ad6d895a"
+dependencies = [
+ "objc2-core-foundation",
 ]
 
 [[package]]
@@ -5681,7 +5705,7 @@ dependencies = [
 [[package]]
 name = "refineable"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast.git?rev=877651fa3665806217c94107356d3c7a34299ebe#877651fa3665806217c94107356d3c7a34299ebe"
+source = "git+https://github.com/aislopware/gpui-fast.git?rev=dc3602e3af56edb1dbbc9211856d4159c1aaff8f#dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 dependencies = [
  "derive_refineable",
 ]
@@ -6046,7 +6070,7 @@ dependencies = [
 [[package]]
 name = "scheduler"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast.git?rev=877651fa3665806217c94107356d3c7a34299ebe#877651fa3665806217c94107356d3c7a34299ebe"
+source = "git+https://github.com/aislopware/gpui-fast.git?rev=dc3602e3af56edb1dbbc9211856d4159c1aaff8f#dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 dependencies = [
  "async-task",
  "backtrace",
@@ -6363,6 +6387,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
+name = "similar"
+version = "2.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
+dependencies = [
+ "bstr",
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "simplecss"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6602,7 +6636,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "sum_tree"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast.git?rev=877651fa3665806217c94107356d3c7a34299ebe#877651fa3665806217c94107356d3c7a34299ebe"
+source = "git+https://github.com/aislopware/gpui-fast.git?rev=dc3602e3af56edb1dbbc9211856d4159c1aaff8f#dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 dependencies = [
  "heapless",
  "rayon",
@@ -6748,9 +6782,9 @@ dependencies = [
 
 [[package]]
 name = "taffy"
-version = "0.13.0"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c034e05f6ee85a12daa63863c2245797715075c70649947aa0da54f3f2ab1d0f"
+checksum = "639627c87f43b9181c811f40a6296409e093a17bc761214cba3c15df74f86b99"
 dependencies = [
  "arrayvec",
  "serde",
@@ -8970,7 +9004,7 @@ dependencies = [
 [[package]]
 name = "ztracing"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast.git?rev=877651fa3665806217c94107356d3c7a34299ebe#877651fa3665806217c94107356d3c7a34299ebe"
+source = "git+https://github.com/aislopware/gpui-fast.git?rev=dc3602e3af56edb1dbbc9211856d4159c1aaff8f#dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 dependencies = [
  "tracing",
  "ztracing_macro",
@@ -8979,7 +9013,7 @@ dependencies = [
 [[package]]
 name = "ztracing_macro"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast.git?rev=877651fa3665806217c94107356d3c7a34299ebe#877651fa3665806217c94107356d3c7a34299ebe"
+source = "git+https://github.com/aislopware/gpui-fast.git?rev=dc3602e3af56edb1dbbc9211856d4159c1aaff8f#dc3602e3af56edb1dbbc9211856d4159c1aaff8f"
 
 [[package]]
 name = "zune-core"
