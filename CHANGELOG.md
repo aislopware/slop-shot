@@ -4,6 +4,16 @@ Sinh từ commit log bằng [git-cliff](https://git-cliff.org). Mục nào nằm
 loại (type) của commit quyết định — tức quyết định lúc VIẾT commit, không phải lúc cắt
 release. Quy ước được `scripts/check-commit-msg.sh` chặn ngay ở hook commit-msg.
 
+## [0.9.8](https://github.com/aislopware/slop-shot/compare/v0.9.7...v0.9.8) — 2026-10-10
+
+### Tests
+
+- Build the temp file URI from a path ([`0f39d2a`](https://github.com/aislopware/slop-shot/commit/0f39d2a9df4e00b2f344890bf26f9e5196e11a7f))
+
+### Tooling
+
+- Update gpui-kit to a737863 and gpui-fast to dc3602e ([`59c7a8c`](https://github.com/aislopware/slop-shot/commit/59c7a8cd23e99c41f2cb8c91ed66f66d007e16f9))
+
 ## [0.9.7](https://github.com/aislopware/slop-shot/compare/v0.9.6...v0.9.7) — 2026-10-09
 
 ### Bug fixes
