@@ -196,8 +196,10 @@ struct EditorView: View {
         ("Thin", 0.003), ("Normal", 0.005), ("Bold", 0.008), ("Heavy", 0.012),
     ]
 
+    // Số nhỏ nhất chưa có trên ảnh: 1 2 3 xoá 1 thì số tiếp là 1, không phải 4.
     private var nextCounter: Int {
-        (annotations.filter { $0.tool == .counter }.map { $0.number }.max() ?? 0) + 1
+        let used = Set(annotations.filter { $0.tool == .counter }.map(\.number))
+        return (1...).first { !used.contains($0) }!
     }
 
     // Có layer nào đang động không → quyết định preview có chạy và xuất ra GIF hay ảnh tĩnh.

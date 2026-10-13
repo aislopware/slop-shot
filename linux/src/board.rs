@@ -328,8 +328,9 @@ impl Board {
         cx.notify();
     }
 
+    /// Lowest number not on the board, so deleting 1 from 1 2 3 makes the next one 1, not 4.
     fn next_counter(&self) -> u32 {
-        self.annotations.iter().filter(|a| a.tool == Tool::Counter).map(|a| a.number).max().unwrap_or(0) + 1
+        (1..).find(|&n| !self.annotations.iter().any(|a| a.tool == Tool::Counter && a.number == n)).unwrap()
     }
 
     /// The image with every annotation drawn in, at full resolution.
