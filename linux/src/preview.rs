@@ -170,7 +170,9 @@ pub fn hud(radius: f32) -> gpui::Div {
 pub fn paint_selection(frame: Bounds<Pixels>, grips: &[Point<Pixels>], window: &mut Window) {
     if grips.len() != 2 {
         let outer = Bounds::new(frame.origin - point(px(3.), px(3.)), frame.size + size(px(6.), px(6.)));
-        window.paint_quad(gpui::outline(outer, white(0.9), gpui::BorderStyle::Dashed));
+        // A dark line under the white dashes keeps the box visible on white screenshots.
+        window.paint_quad(gpui::outline(outer, black(0.6), gpui::BorderStyle::Solid));
+        window.paint_quad(gpui::outline(outer, white(1.), gpui::BorderStyle::Dashed));
     }
     let hs = px(9.);
     for c in grips {

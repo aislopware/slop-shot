@@ -651,13 +651,20 @@ struct EditorView: View {
 
     // Lớp annotation. Tách ra hàm riêng vì được gọi từ 2 nhánh (tĩnh / TimelineView).
     private func canvas(_ size: CGSize, time: Double) -> some View {
-        Canvas { ctx, _ in
-            for a in annotations where a.id != editingID {
-                Self.draw(a, base: image, size: size, time: time, unit: unit, in: &ctx)
+        ZStack {
+            Canvas { ctx, _ in
+                for a in annotations where a.id != editingID {
+                    Self.draw(a, base: image, size: size, time: time, unit: unit, in: &ctx)
+                }
+                if let c = current { Self.draw(c, base: image, size: size, time: time, unit: unit, in: &ctx) }
             }
-            if let c = current { Self.draw(c, base: image, size: size, time: time, unit: unit, in: &ctx) }
             if let id = selectedID, id != editingID, let a = annotations.first(where: { $0.id == id }) {
-                Self.drawSelection(a, size: size, unit: unit, in: &ctx)
+                // Blend .difference đảo màu chỗ nằm dưới khung: ảnh tối thì khung sáng,
+                // ảnh sáng thì khung tối. Blend trong Canvas chỉ thấy nét vẽ, không
+                // thấy ảnh nền — nên khung phải là view riêng đè lên ảnh.
+                Canvas { ctx, _ in Self.drawSelectionBox(a, size: size, unit: unit, in: &ctx) }
+                    .blendMode(.difference)
+                Canvas { ctx, _ in Self.drawGrips(a, size: size, in: &ctx) }
             }
         }
         .frame(width: size.width, height: size.height)
@@ -1173,17 +1180,18 @@ struct EditorView: View {
         grips(a).firstIndex { hypot(p.x - $0.x * s.width, p.y - $0.y * s.height) <= 9 }
     }
 
-    // Khung nét đứt quanh layer đang chọn + ô vuông trắng ở các tay nắm.
-    private static func drawSelection(_ a: Annotation, size s: CGSize, unit: CGFloat,
-                                      in ctx: inout GraphicsContext) {
-        guard let box = frame(of: a, in: s, unit: unit)?.insetBy(dx: -3, dy: -3) else { return }
+    // Khung nét đứt quanh layer đang chọn. Vẽ trắng, view chứa nó blend .difference.
+    private static func drawSelectionBox(_ a: Annotation, size s: CGSize, unit: CGFloat,
+                                         in ctx: inout GraphicsContext) {
+        guard grips(a).count != 2,   // đường kẻ thì 2 tay nắm là đủ thấy, khỏi đóng khung
+              let box = frame(of: a, in: s, unit: unit)?.insetBy(dx: -3, dy: -3) else { return }
+        ctx.stroke(Path(box), with: .color(.white), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+    }
+
+    // Ô vuông trắng ở các tay nắm của layer đang chọn.
+    private static func drawGrips(_ a: Annotation, size s: CGSize, in ctx: inout GraphicsContext) {
         let hs: CGFloat = 9
-        let handles = grips(a)
-        if handles.count != 2 {      // đường kẻ thì 2 tay nắm là đủ thấy, khỏi đóng khung
-            ctx.stroke(Path(box), with: .color(.white.opacity(0.9)),
-                       style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
-        }
-        for c in handles {
+        for c in grips(a) {
             let center = CGPoint(x: c.x * s.width, y: c.y * s.height)
             let sq = CGRect(x: center.x - hs / 2, y: center.y - hs / 2, width: hs, height: hs)
             ctx.fill(Path(roundedRect: sq, cornerRadius: 2), with: .color(.white))
