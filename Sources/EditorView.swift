@@ -274,7 +274,7 @@ struct EditorView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.hud(radius: 7))
-                .help("Cancel (esc)")
+                .tooltip("Cancel (esc)")
                 Button { finishInline(.save) } label: {
                     Image(systemName: "square.and.arrow.down")
                         .font(.system(size: 13, weight: .semibold))
@@ -283,7 +283,7 @@ struct EditorView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.hud(radius: 7))
-                .help("Save (⌘S)")
+                .tooltip("Save (⌘S)")
                 Button { finishInline(.copy) } label: {
                     Label("Copy", systemImage: "doc.on.doc")
                         .font(.system(size: 12, weight: .semibold))
@@ -294,7 +294,7 @@ struct EditorView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.hud(radius: 7, selected: true))
-                .help("Copy and close (⌘C or ↩)")
+                .tooltip("Copy and close (⌘C or ↩)")
             }
         }
         .disabled(exporting)
@@ -763,7 +763,7 @@ struct EditorView: View {
         .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
                         .fill(tool == t ? Color.accentColor : .clear))
         .animation(Theme.quick, value: tool)
-        .help(t.key.map { "\(t.label) (\($0))" } ?? t.label)
+        .tooltip(t.key.map { "\(t.label) (\($0))" } ?? t.label)
     }
 
     // ── Color: swatch tròn → popover lưới màu ──────────────────────────────
@@ -776,7 +776,7 @@ struct EditorView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.hud)
-        .help("Color")
+        .tooltip("Color")
         .popover(isPresented: $showColorPopover, arrowEdge: .bottom) {
             let cols = Array(repeating: GridItem(.fixed(26), spacing: 10), count: 5)
             LazyVGrid(columns: cols, spacing: 10) {
@@ -806,7 +806,7 @@ struct EditorView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.hud)
-        .help("Stroke width · blur strength")
+        .tooltip("Stroke width · blur strength")
         .popover(isPresented: $showWidthPopover, arrowEdge: .bottom) {
             VStack(spacing: 2) {
                 ForEach(widths, id: \.0) { name, w in
@@ -843,7 +843,7 @@ struct EditorView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.hud)
-        .help("Stickers")
+        .tooltip("Stickers")
         .popover(isPresented: $showStickerPopover, arrowEdge: .bottom) {
             StickerPicker { seq, name in
                 haptic()
@@ -880,7 +880,7 @@ struct EditorView: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .frame(width: 30, height: 28)
-        .help("Flip & rotate")
+        .tooltip("Flip & rotate")
     }
 
     private func transformItem(_ title: String, _ symbol: String,
@@ -910,7 +910,7 @@ struct EditorView: View {
         }
         .buttonStyle(.hud)
         .disabled(scanning)
-        .help(redactHint > 0
+        .tooltip(redactHint > 0
               ? "Redact — \(redactHint) sensitive item\(redactHint == 1 ? "" : "s") found"
               : "Redact — find & black out emails, phone numbers, card numbers and tokens")
     }
@@ -978,7 +978,7 @@ struct EditorView: View {
         }
         .buttonStyle(.hud)
         .disabled(annotations.isEmpty)
-        .help("Undo")
+        .tooltip("Undo")
     }
 
     // Xóa sạch annotation 1 phát (Undo khôi phục lại được).
@@ -992,7 +992,7 @@ struct EditorView: View {
         }
         .buttonStyle(.hud)
         .disabled(annotations.isEmpty)
-        .help("Clear all annotations")
+        .tooltip("Clear all annotations")
     }
 
     // ── Bottom bar ─────────────────────────────────────────────────────────

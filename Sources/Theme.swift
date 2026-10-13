@@ -102,7 +102,7 @@ struct HUDButtonStyle: ButtonStyle {
                 .scaleEffect(configuration.isPressed ? 0.94 : 1)
                 .animation(Theme.quick, value: hovering)
                 .animation(Theme.quick, value: configuration.isPressed)
-                .onHover { hovering = $0 }
+                .onHoverAlways { hovering = $0 }
         }
     }
 }
@@ -111,5 +111,78 @@ extension ButtonStyle where Self == HUDButtonStyle {
     static var hud: HUDButtonStyle { HUDButtonStyle() }
     static func hud(radius: CGFloat = Theme.Radius.control, selected: Bool = false) -> HUDButtonStyle {
         HUDButtonStyle(radius: radius, selected: selected)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// `.onHover` và `.help` của SwiftUI chỉ chạy khi app đang ACTIVE. Editor inline
+// nằm trong lớp phủ nonactivating (app vẫn nền) → rê chuột không sáng nút, không
+// hiện tooltip; tooltip hệ thống còn nằm dưới level .screenSaver của lớp phủ.
+// Nên hover tự gắn tracking area `.activeAlways`, tooltip tự vẽ bằng SwiftUI.
+// ─────────────────────────────────────────────────────────────────────────
+private struct HoverTracker: NSViewRepresentable {
+    let onChange: (Bool) -> Void
+
+    func makeNSView(context: Context) -> TrackingView { TrackingView() }
+    func updateNSView(_ v: TrackingView, context: Context) { v.onChange = onChange }
+
+    final class TrackingView: NSView {
+        var onChange: ((Bool) -> Void)?
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            trackingAreas.forEach(removeTrackingArea)
+            addTrackingArea(NSTrackingArea(rect: .zero,
+                                           options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                           owner: self, userInfo: nil))
+        }
+        override func mouseEntered(with event: NSEvent) { onChange?(true) }
+        override func mouseExited(with event: NSEvent) { onChange?(false) }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+}
+
+private struct HUDTooltip: ViewModifier {
+    let text: String
+    @State private var hovering = false
+    @State private var shown = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHoverAlways { hovering = $0 }
+            .simultaneousGesture(TapGesture().onEnded { hovering = false })
+            .overlay(alignment: .bottom) {
+                if shown {
+                    Text(text)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .hudBackground(radius: Theme.Radius.small, blending: .withinWindow)
+                        .fixedSize()
+                        .alignmentGuide(.bottom) { $0[.top] - 8 }
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                }
+            }
+            .zIndex(shown ? 1 : 0)
+            .task(id: hovering) {
+                guard hovering else { shown = false; return }
+                try? await Task.sleep(for: .milliseconds(450))
+                guard !Task.isCancelled else { return }
+                withAnimation(Theme.quick) { shown = true }
+            }
+            .onDisappear { hovering = false }
+    }
+}
+
+extension View {
+    /// `.onHover` chạy cả khi app không active.
+    func onHoverAlways(_ action: @escaping (Bool) -> Void) -> some View {
+        background(HoverTracker(onChange: action))
+    }
+
+    /// Tooltip nổi ngay dưới nút, hiện cả trong lớp phủ inline (xem HoverTracker).
+    func tooltip(_ text: String) -> some View {
+        modifier(HUDTooltip(text: text))
     }
 }
