@@ -69,8 +69,10 @@ done
 # version đều do scripts/bump-version.sh sửa; nếu chúng lệch nhau thì đang cắt release dở dang.
 "${REPO_ROOT}/scripts/bump-version.sh" --check "${VERSION}"
 
-# --non-interactive: CI không có ai trả lời một picker, nên thiếu gì thì phải fail.
-cert=(--non-interactive --certificate-id "${CERTIFICATE_ID}")
+# --non-interactive: CI không có ai trả lời một picker, nên thiếu gì thì phải fail. Chạy ở máy
+# mình (có terminal) thì để better-update hỏi passphrase mở khoá device identity.
+if [[ -t 0 ]]; then prompt=--interactive; else prompt=--non-interactive; fi
+cert=("${prompt}" --certificate-id "${CERTIFICATE_ID}")
 asc_key=(--asc-key-id "${ASC_KEY_ID}")
 
 rm -rf "${WORK}"
@@ -133,7 +135,7 @@ if [[ "${SKIP_NOTARIZE}" == "1" ]]; then
   echo "SLOPSHOT_SKIP_NOTARIZE=1 — app đã ký nhưng CHƯA notarize/staple."
 else
   step "Notarize + staple ${APP}"
-  better-update macos notarize "${STAGE}/${APP}" --non-interactive "${asc_key[@]}"
+  better-update macos notarize "${STAGE}/${APP}" "${prompt}" "${asc_key[@]}"
   # Validate lại thay vì tin exit code: ticket không dán được thì phải fail ở đây, chứ không ship
   # một app trông ổn cho tới lúc ai đó mở nó offline.
   xcrun stapler validate "${STAGE}/${APP}" ||
