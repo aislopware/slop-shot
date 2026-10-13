@@ -4,6 +4,18 @@ Sinh từ commit log bằng [git-cliff](https://git-cliff.org). Mục nào nằm
 loại (type) của commit quyết định — tức quyết định lúc VIẾT commit, không phải lúc cắt
 release. Quy ước được `scripts/check-commit-msg.sh` chặn ngay ở hook commit-msg.
 
+## [0.9.9](https://github.com/aislopware/slop-shot/compare/v0.9.8...v0.9.9) — 2026-10-13
+
+### Bug fixes
+
+- Number the next counter from the lowest free value ([`6a68554`](https://github.com/aislopware/slop-shot/commit/6a68554b0155fa6e8fc1c93aa62a3bc53afb406d))
+- Keep the selection outline visible on any background ([`8dcca0c`](https://github.com/aislopware/slop-shot/commit/8dcca0cc9f2ee076588600af5df0858e44647562))
+- Show tooltips and hover states in the inline editor ([`1fad902`](https://github.com/aislopware/slop-shot/commit/1fad9020702b5579662278be6315c290ec252023))
+
+### Tooling
+
+- Prompt for the identity passphrase on local runs ([`fd806f1`](https://github.com/aislopware/slop-shot/commit/fd806f14e619a669f6039c99777c2db60367828a))
+
 ## [0.9.8](https://github.com/aislopware/slop-shot/compare/v0.9.7...v0.9.8) — 2026-10-10
 
 ### Tests
