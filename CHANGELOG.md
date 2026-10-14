@@ -4,6 +4,12 @@ Sinh từ commit log bằng [git-cliff](https://git-cliff.org). Mục nào nằm
 loại (type) của commit quyết định — tức quyết định lúc VIẾT commit, không phải lúc cắt
 release. Quy ước được `scripts/check-commit-msg.sh` chặn ngay ở hook commit-msg.
 
+## [0.10.1](https://github.com/aislopware/slop-shot/compare/v0.10.0...v0.10.1) — 2026-10-14
+
+### Tests
+
+- Follow the zeron alert button and history header in E2E ([`b48de93`](https://github.com/aislopware/slop-shot/commit/b48de9306f4b472d36d39d6d9ace7c2d39515910))
+
 ## [0.10.0](https://github.com/aislopware/slop-shot/compare/v0.9.9...v0.10.0) — 2026-10-14
 
 ### Features
