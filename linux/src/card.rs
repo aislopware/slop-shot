@@ -238,7 +238,7 @@ pub fn host_main() {
     });
     gpui_platform::application().with_assets(crate::Assets).run(move |cx: &mut App| {
         gpui_component::init(cx);
-        crate::preview::apply_ui_font(cx);
+        crate::theme::install(cx);
         cx.spawn(async move |cx| {
             while let Ok(request) = rx.recv().await {
                 cx.update(|cx| handle(request, cx));

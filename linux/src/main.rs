@@ -19,6 +19,8 @@ mod prefs;
 mod preview;
 mod raster;
 mod record;
+#[cfg(test)]
+mod render_tests;
 mod screencast;
 mod scroll;
 mod sensitive;
@@ -26,13 +28,14 @@ mod settings;
 mod shortcuts;
 mod snap;
 mod stickers;
+mod theme;
 mod tray;
+mod ui;
 mod video;
 
 use std::borrow::Cow;
 
 use gpui::{App, AssetSource, QuitMode, SharedString};
-use gpui_component::{Theme, ThemeMode};
 
 use crate::ipc::{Command, Instance};
 use crate::overlay::{Mode, Purpose};
@@ -148,8 +151,7 @@ fn main() {
         .with_quit_mode(QuitMode::Explicit)
         .run(move |cx: &mut App| {
             gpui_component::init(cx);
-            Theme::change(ThemeMode::Dark, None, cx);
-            preview::apply_ui_font(cx);
+            theme::install(cx);
             cx.set_global(Settings::load());
             card::init(flow::on_card_event, cx);
             tray::init(tx, cx);

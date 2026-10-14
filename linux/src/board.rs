@@ -1077,20 +1077,13 @@ impl Render for Board {
 
 // ── Toolbar pieces shared by the window and inline editors ─────────────────
 
+/// A group of tool buttons on a faint wash, without an outline.
 pub fn pill() -> Div {
-    div()
-        .flex()
-        .items_center()
-        .gap(px(3.))
-        .p(px(5.))
-        .rounded(px(12.))
-        .bg(white(0.06))
-        .border_1()
-        .border_color(white(0.08))
+    div().flex().items_center().gap(px(2.)).p(px(3.)).rounded(px(10.)).bg(white(0.05))
 }
 
 pub fn divider() -> Div {
-    div().w(px(1.)).h(px(22.)).mx(px(2.)).bg(white(0.12))
+    div().w(px(1.)).h(px(18.)).mx(px(3.)).bg(white(0.08))
 }
 
 /// A borderless HUD button: highlight on hover, tooltip, click handler.
@@ -1099,7 +1092,7 @@ pub fn hud_button(
     tip: impl Into<SharedString>,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
-    tinted_button(id, tip, white(0.08), on_click)
+    tinted_button(id, tip, white(0.07), on_click)
 }
 
 /// A HUD button whose background is `hover` under the pointer.
@@ -1116,8 +1109,9 @@ pub fn tinted_button(
         .items_center()
         .justify_center()
         .rounded(px(7.))
+        .text_color(crate::theme::muted())
         .cursor_pointer()
-        .hover(move |s| s.bg(hover))
+        .hover(move |s| s.bg(hover).text_color(crate::theme::text()))
         .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
         .on_click(on_click)
 }
@@ -1126,7 +1120,7 @@ pub fn icon(name: IconName, size: f32, color: gpui::Hsla) -> Icon {
     Icon::new(name).size(px(size)).text_color(color)
 }
 
-fn tool_icon(tool: Tool) -> AnyElement {
+fn tool_icon(tool: Tool, color: gpui::Hsla) -> AnyElement {
     let name = match tool {
         Tool::Select => IconName::MousePointer2,
         Tool::Rect => IconName::RectangleHorizontal,
@@ -1144,7 +1138,8 @@ fn tool_icon(tool: Tool) -> AnyElement {
                 .size(px(15.))
                 .rounded_full()
                 .border(px(1.5))
-                .border_color(gpui::white())
+                .border_color(color)
+                .text_color(color)
                 .flex()
                 .items_center()
                 .justify_center()
@@ -1154,7 +1149,7 @@ fn tool_icon(tool: Tool) -> AnyElement {
                 .into_any_element();
         }
     };
-    icon(name, 14., gpui::white()).into_any_element()
+    icon(name, 15., color).into_any_element()
 }
 
 pub fn tools_pill(board: &Entity<Board>, cx: &App) -> Div {
@@ -1168,7 +1163,7 @@ pub fn tools_pill(board: &Entity<Board>, cx: &App) -> Div {
             let selected = tool == current;
             let board = board.clone();
             pill = pill.child(
-                tinted_button(tool.id(), tool.tooltip(), if selected { accent() } else { white(0.08) }, move |_, window, cx| {
+                tinted_button(tool.id(), tool.tooltip(), if selected { white(0.12) } else { white(0.07) }, move |_, window, cx| {
                     board.update(cx, |b, cx| {
                         b.pick(tool, cx);
                         b.end_editing(window, cx);
@@ -1176,9 +1171,8 @@ pub fn tools_pill(board: &Entity<Board>, cx: &App) -> Div {
                 })
                 .w(px(30.))
                 .h(px(28.))
-                .text_color(if selected { gpui::white() } else { gpui::hsla(0., 0., 0.8, 1.) })
-                .when(selected, |d| d.bg(accent()))
-                .child(tool_icon(tool)),
+                .when(selected, |d| d.bg(white(0.12)))
+                .child(tool_icon(tool, if selected { crate::theme::text() } else { crate::theme::muted() })),
             );
         }
     }
@@ -1255,7 +1249,7 @@ pub fn style_pill(board: &Entity<Board>, cx: &App) -> Div {
             board.update(cx, |b, cx| b.toggle_popover(Pop::Width, cx))
         })
         .size(px(30.))
-        .child(icon(IconName::Baseline, 14., gpui::hsla(0., 0., 0.85, 1.)))
+        .child(icon(IconName::Baseline, 14., crate::theme::muted()))
     };
     let width_panel = {
         let board = board.clone();
@@ -1292,7 +1286,7 @@ pub fn style_pill(board: &Entity<Board>, cx: &App) -> Div {
         let board = board.clone();
         hud_button("stickers", "Stickers", move |_, _, cx| board.update(cx, |b, cx| b.toggle_popover(Pop::Sticker, cx)))
             .size(px(30.))
-            .child(icon(IconName::Sticker, 15., gpui::hsla(0., 0., 0.85, 1.)))
+            .child(icon(IconName::Sticker, 15., crate::theme::muted()))
     };
     let sticker_panel = {
         let (board, picker) = (board.clone(), b.stickers.clone());
@@ -1324,7 +1318,7 @@ pub fn redact_button(board: &Entity<Board>, cx: &App) -> Stateful<Div> {
         .child(icon(
             if scanning { IconName::Hourglass } else { IconName::EyeOff },
             14.,
-            if hint > 0 { orange } else { gpui::hsla(0., 0., 0.85, 1.) },
+            if hint > 0 { orange } else { crate::theme::muted() },
         ))
         .when(hint > 0, |d| {
             d.child(
@@ -1355,7 +1349,7 @@ pub fn undo_button(board: &Entity<Board>, cx: &App) -> Stateful<Div> {
         .w(px(32.))
         .h(px(30.))
         .when(empty, |d| d.opacity(0.4))
-        .child(icon(IconName::Undo2, 14., gpui::hsla(0., 0., 0.85, 1.)))
+        .child(icon(IconName::Undo2, 14., crate::theme::muted()))
 }
 
 pub fn clear_button(board: &Entity<Board>, cx: &App) -> Stateful<Div> {
@@ -1365,7 +1359,7 @@ pub fn clear_button(board: &Entity<Board>, cx: &App) -> Stateful<Div> {
         .w(px(32.))
         .h(px(30.))
         .when(empty, |d| d.opacity(0.4))
-        .child(icon(IconName::Trash, 14., gpui::hsla(0., 0., 0.85, 1.)))
+        .child(icon(IconName::Trash, 14., crate::theme::muted()))
 }
 
 pub fn transform_menu(board: &Entity<Board>, cx: &App) -> Div {
@@ -1377,7 +1371,7 @@ pub fn transform_menu(board: &Entity<Board>, cx: &App) -> Div {
         })
         .w(px(30.))
         .h(px(28.))
-        .child(icon(IconName::RotateCwSquare, 14., gpui::hsla(0., 0., 0.85, 1.)))
+        .child(icon(IconName::RotateCwSquare, 14., crate::theme::muted()))
     };
     let panel = {
         let board = board.clone();

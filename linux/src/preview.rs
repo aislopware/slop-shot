@@ -49,12 +49,6 @@ impl View {
     }
 }
 
-/// GPUI's system font on Ubuntu is Ubuntu, which can't draw Vietnamese; the UI uses
-/// the face the editor draws text with instead.
-pub fn apply_ui_font(cx: &mut gpui::App) {
-    gpui_component::Theme::global_mut(cx).font_family = raster::ui_font().family.clone().into();
-}
-
 pub fn ui_font() -> Font {
     Font { weight: FontWeight::BOLD, ..gpui::font(raster::ui_font().family.clone()) }
 }
@@ -136,9 +130,8 @@ pub fn paint(
     }
 }
 
-/// macOS's default accent (dark appearance).
 pub fn accent() -> Hsla {
-    gpui::rgb(0x0A84FF).into()
+    crate::theme::accent()
 }
 
 pub fn white(alpha: f32) -> Hsla {
@@ -149,20 +142,21 @@ pub fn black(alpha: f32) -> Hsla {
     gpui::hsla(0., 0., 0., alpha)
 }
 
-/// The dark translucent panel macOS draws with `.hudBackground`.
+/// zeron's popover card: the highest plane, a hairline edge and a soft drop.
 pub fn hud(radius: f32) -> gpui::Div {
     use gpui::{Styled as _, div};
     div()
         .rounded(px(radius))
-        .bg(gpui::hsla(0., 0., 0.11, 0.92))
+        .bg(crate::theme::popover().opacity(0.97))
         .border_1()
-        .border_color(white(0.1))
+        .border_color(white(0.08))
+        .text_color(crate::theme::text())
         .shadow(vec![gpui::BoxShadow {
-            color: black(0.4),
-            offset: point(px(0.), px(4.)),
-            blur_radius: px(12.),
+            color: black(0.45),
+            offset: point(px(0.), px(8.)),
+            blur_radius: px(24.),
             spread_radius: px(0.),
-                inset: false,
+            inset: false,
         }])
 }
 

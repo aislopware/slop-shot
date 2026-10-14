@@ -9,18 +9,17 @@ use gpui::{
     KeyDownEvent, MouseButton, Pixels, Size, Subscription, Window, WindowBackgroundAppearance,
     WindowBounds, WindowDecorations, WindowOptions, canvas, div, prelude::*, px, size,
 };
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::{Sizable as _, window_border};
+use gpui_component::window_border;
 use gpui_kit_assets::IconName;
 use image::RgbaImage;
 
 use crate::board::{self, Board};
-use crate::preview::white;
 use crate::settings::Settings;
-use crate::{alert, flow, output};
+use crate::ui::{self, Tone};
+use crate::{alert, flow, output, theme};
 
-const TOP_BAR: f32 = 52.;
-const BOTTOM_BAR: f32 = 44.;
+const TOP_BAR: f32 = 50.;
+const BOTTOM_BAR: f32 = 40.;
 const PAD: f32 = 28.;
 
 struct EditorWindow {
@@ -88,7 +87,7 @@ pub fn has_unsaved_annotations(cx: &App) -> bool {
     })
 }
 
-struct Editor {
+pub(crate) struct Editor {
     board: Entity<Board>,
     source: Option<PathBuf>,
     /// 1 = fit to the window.
@@ -100,7 +99,7 @@ struct Editor {
 }
 
 impl Editor {
-    fn new(image: RgbaImage, source: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(image: RgbaImage, source: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let board = cx.new(|cx| Board::new(image, 1., focus.clone(), cx));
@@ -321,11 +320,11 @@ impl Editor {
             .flex_none()
             .flex()
             .items_center()
-            .gap(px(10.))
-            .px(px(14.))
-            .bg(gpui::hsla(0., 0., 0.13, 1.))
+            .gap(px(8.))
+            .px(px(10.))
+            .bg(theme::bg())
             .border_b_1()
-            .border_color(white(0.08))
+            .border_color(theme::ink(0.06))
             .child(board::tools_pill(&self.board, cx))
             .child(board::style_pill(&self.board, cx))
             .child(actions)
@@ -337,71 +336,47 @@ impl Editor {
                     .min_w(px(8.))
                     .on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move()),
             )
-            .child(
-                Button::new("save-as")
-                    .label("Save as…")
-                    .large()
-                    .on_click(cx.listener(|this, _, window, cx| this.save_as(window, cx))),
-            )
-            .child(
-                Button::new("done")
-                    .label("Done")
-                    .primary()
-                    .large()
-                    .on_click(cx.listener(|this, _, window, cx| this.done(window, cx))),
-            )
+            .child(ui::text_button("save-as", Tone::Filled, "Save as…").on_click(cx.listener(|this, _, window, cx| this.save_as(window, cx))))
+            .child(ui::text_button("done", Tone::Solid, "Done").on_click(cx.listener(|this, _, window, cx| this.done(window, cx))))
     }
 
     fn bottom_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let gray = gpui::hsla(0., 0., 0.85, 1.);
         let zoom_button = |id: &'static str, name: IconName, f: fn(&mut Self, &mut Context<Self>)| {
             board::hud_button(id, "", cx.listener(move |this, _, _, cx| f(this, cx)))
                 .size(px(24.))
-                .child(board::icon(name, 11., gray))
+                .child(board::icon(name, 12., theme::muted()))
         };
         let zoom = div()
             .flex()
             .items_center()
             .gap(px(1.))
-            .px(px(3.))
-            .py(px(2.))
-            .rounded(px(5.))
-            .bg(white(0.08))
+            .p(px(2.))
+            .rounded(px(8.))
+            .bg(theme::ink(0.05))
             .child(zoom_button("zoom-out", IconName::Minus, Self::zoom_out))
             .child(
                 board::hud_button("zoom-fit", "Fit to window (Ctrl+0)", cx.listener(|this, _, _, cx| this.zoom_fit(cx)))
-                    .w(px(42.))
+                    .w(px(46.))
                     .h(px(24.))
-                    .text_size(px(11.))
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(gray)
+                    .text_size(px(12.))
+                    .text_color(theme::text())
                     .child(format!("{}%", (self.zoom * 100.).round() as i32)),
             )
             .child(zoom_button("zoom-in", IconName::Plus, Self::zoom_in));
         let icon_button = |id: &'static str, name: IconName, tip: &'static str, f: fn(&mut Self, &mut Window, &mut Context<Self>)| {
-            board::hud_button(id, tip, cx.listener(move |this, _, window, cx| f(this, window, cx)))
-                .w(px(34.))
-                .h(px(30.))
-                .bg(white(0.08))
-                .child(board::icon(name, 13., gray))
+            ui::icon_button(id, name, tip).on_click(cx.listener(move |this, _, window, cx| f(this, window, cx)))
         };
         div()
             .h(px(BOTTOM_BAR))
             .flex_none()
             .flex()
             .items_center()
-            .gap(px(10.))
-            .px(px(16.))
-            .bg(gpui::hsla(0., 0., 0.13, 1.))
+            .gap(px(6.))
+            .px(px(12.))
+            .bg(theme::bg())
             .border_t_1()
-            .border_color(white(0.08))
-            .child(
-                div()
-                    .flex_1()
-                    .text_size(px(11.))
-                    .text_color(gpui::hsla(0., 0., 0.55, 1.))
-                    .child(self.board.read(cx).status_line()),
-            )
+            .border_color(theme::ink(0.06))
+            .child(div().flex_1().text_size(px(12.)).text_color(theme::faint()).child(self.board.read(cx).status_line()))
             .child(zoom)
             .child(icon_button("share", IconName::Share, "Share", Self::share))
             .child(icon_button("copy", IconName::Copy, "Copy", Self::copy))
@@ -439,7 +414,7 @@ impl Render for Editor {
             .id("board-area")
             .size_full()
             .overflow_scroll()
-            .bg(gpui::hsla(0., 0., 0.11, 1.))
+            .bg(theme::sidebar())
             .child(
                 div()
                     .min_w(px(avail_w))
@@ -454,9 +429,9 @@ impl Render for Editor {
                             .w(px(w))
                             .h(px(h))
                             .shadow(vec![gpui::BoxShadow {
-                                color: gpui::hsla(0., 0., 0., 0.5),
-                                offset: gpui::point(px(0.), px(6.)),
-                                blur_radius: px(16.),
+                                color: gpui::hsla(0., 0., 0., 0.55),
+                                offset: gpui::point(px(0.), px(8.)),
+                                blur_radius: px(24.),
                                 spread_radius: px(0.),
                                 inset: false,
                             }])
@@ -472,8 +447,9 @@ impl Render for Editor {
                 .size_full()
                 .flex()
                 .flex_col()
-                .bg(gpui::hsla(0., 0., 0.11, 1.))
-                .text_color(gpui::white())
+                .bg(theme::bg())
+                .text_color(theme::text())
+                .text_size(px(13.))
                 .child(self.top_bar(cx))
                 .child(div().relative().flex_1().min_h_0().child(measure).child(area))
                 .child(self.bottom_bar(cx)),

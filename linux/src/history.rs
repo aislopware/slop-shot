@@ -10,14 +10,13 @@ use gpui::{
     div, img, prelude::*, px,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::{ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit_assets::IconName;
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization as _;
 
 use crate::settings::{Settings, data_dir};
-use crate::{chrome, editor, output, preview};
+use crate::{chrome, editor, output, preview, theme, ui};
 
 const MAX_ITEMS: usize = 100;
 const THUMB_SIDE: u32 = 240;
@@ -331,7 +330,7 @@ pub fn open_window(cx: &mut App) {
     {
         return;
     }
-    let options = chrome::window_options("Capture History", (420., 520.), Some((360., 320.)), cx);
+    let options = chrome::window_options("Capture History", (440., 560.), Some((360., 360.)), cx);
     match cx.open_window(options, |window, cx| {
         let view = cx.new(|cx| HistoryView::new(window, cx));
         cx.new(|cx| gpui_component::Root::new(view, window, cx))
@@ -341,14 +340,14 @@ pub fn open_window(cx: &mut App) {
     }
 }
 
-struct HistoryView {
+pub(crate) struct HistoryView {
     query: Entity<InputState>,
     hovered: Option<String>,
     _sub: gpui::Subscription,
 }
 
 impl HistoryView {
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let query = cx.new(|cx| InputState::new(window, cx).placeholder("Search text inside captures…"));
         let sub = cx.subscribe(&query, |_, _, e: &InputEvent, cx| {
             if matches!(e, InputEvent::Change) {
@@ -366,17 +365,18 @@ impl HistoryView {
         }
     }
 
-    fn empty_state(icon: IconName, title: String, caption: &'static str, cx: &App) -> gpui::Div {
+    fn empty_state(icon: IconName, title: String, caption: &'static str) -> gpui::Div {
         div()
             .flex_1()
             .flex()
             .flex_col()
             .items_center()
             .justify_center()
-            .gap_2()
-            .child(Icon::new(icon).size(px(34.)).text_color(cx.theme().muted_foreground.opacity(0.6)))
-            .child(div().text_color(cx.theme().muted_foreground).child(title))
-            .child(div().max_w(px(260.)).text_center().text_xs().text_color(cx.theme().muted_foreground.opacity(0.7)).child(caption))
+            .gap(px(6.))
+            .pb(px(40.))
+            .child(ui::icon(icon, 28., theme::faint()))
+            .child(div().mt(px(8.)).text_size(px(15.)).font_weight(gpui::FontWeight::MEDIUM).text_color(theme::text()).child(title))
+            .child(div().max_w(px(260.)).text_center().text_size(px(12.5)).text_color(theme::muted()).child(caption))
     }
 
     fn row(&self, item: Item, thumb: Option<Arc<RenderImage>>, q: &str, cx: &mut Context<Self>) -> impl IntoElement {
@@ -391,7 +391,7 @@ impl HistoryView {
         let id = item.id.clone();
         let action = |name: &'static str, icon: IconName, tip: &'static str, f: fn(&Item, &mut App), item: &Item, cx: &mut Context<Self>| {
             let item = item.clone();
-            chrome::icon_button(gpui::SharedString::from(format!("{name}-{}", item.id)), icon, tip, cx).on_click(cx.listener(move |_, _, _, cx| {
+            ui::icon_button(gpui::SharedString::from(format!("{name}-{}", item.id)), icon, tip).on_click(cx.listener(move |_, _, _, cx| {
                 f(&item, cx);
                 cx.notify();
             }))
@@ -400,10 +400,11 @@ impl HistoryView {
             .id(gpui::SharedString::from(item.id.clone()))
             .flex()
             .items_center()
-            .gap_3()
-            .px(px(14.))
-            .py(px(10.))
-            .when(hovering, |d| d.bg(cx.theme().foreground.opacity(0.06)))
+            .gap(px(12.))
+            .px(px(8.))
+            .py(px(8.))
+            .rounded(px(10.))
+            .when(hovering, |d| d.bg(theme::ink(0.05)))
             .on_hover(cx.listener(move |this, hover: &bool, _, cx| {
                 this.hovered = hover.then(|| id.clone());
                 cx.notify();
@@ -411,7 +412,6 @@ impl HistoryView {
             .child(
                 div()
                     .relative()
-                    .size_full()
                     .w(px(56.))
                     .h(px(40.))
                     .flex_none()
@@ -420,13 +420,15 @@ impl HistoryView {
                     .justify_center()
                     .rounded(px(6.))
                     .overflow_hidden()
-                    .bg(cx.theme().secondary)
+                    .bg(theme::block())
+                    .border_1()
+                    .border_color(theme::ink(0.08))
                     .child(match thumb {
                         Some(t) => img(t).size_full().object_fit(ObjectFit::Cover).into_any_element(),
-                        None => Icon::new(fallback).text_color(cx.theme().muted_foreground).into_any_element(),
+                        None => ui::icon(fallback, 16., theme::muted()).into_any_element(),
                     })
                     .when(item.kind == Kind::Video, |d| {
-                        d.child(div().absolute().inset_0().flex().items_center().justify_center().child(Icon::new(IconName::CirclePlay).size(px(18.)).text_color(gpui::white())))
+                        d.child(div().absolute().inset_0().flex().items_center().justify_center().child(ui::icon(IconName::CirclePlay, 18., gpui::white())))
                     }),
             )
             .child(
@@ -436,15 +438,22 @@ impl HistoryView {
                     .flex()
                     .flex_col()
                     .gap(px(2.))
-                    .child(div().text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD).child(item.title()))
-                    .child(div().text_xs().text_color(cx.theme().muted_foreground).child(format!("{} · {}", item.subtitle, relative(item.date))))
-                    .children(snippet.map(|s| div().text_size(px(11.)).truncate().text_color(cx.theme().muted_foreground.opacity(0.7)).child(s))),
+                    .child(
+                        div()
+                            .flex()
+                            .items_baseline()
+                            .gap(px(8.))
+                            .child(div().text_size(px(13.)).font_weight(gpui::FontWeight::MEDIUM).text_color(theme::text()).child(item.title()))
+                            .child(div().text_size(px(11.5)).text_color(theme::faint()).child(relative(item.date))),
+                    )
+                    .child(div().text_size(px(12.)).truncate().text_color(theme::muted()).child(item.subtitle.clone()))
+                    .children(snippet.map(|s| div().text_size(px(11.5)).truncate().text_color(theme::faint()).child(s))),
             )
             .child(
                 div()
                     .flex()
-                    .gap(px(6.))
-                    .opacity(if hovering { 1. } else { 0.85 })
+                    .gap(px(2.))
+                    .when(!hovering, |d| d.opacity(0.))
                     .child(action("copy", IconName::Copy, "Copy", copy, &item, cx))
                     .when(matches!(item.kind, Kind::Image | Kind::Video) && exists, |d| d.child(action("save", IconName::Download, "Save", save, &item, cx)))
                     .map(|d| match item.kind {
@@ -471,49 +480,58 @@ impl Render for HistoryView {
                 (i, t)
             })
             .collect();
-        let header = div()
+        let top = div()
+            .h(px(ui::TITLEBAR_HEIGHT))
+            .flex_none()
             .flex()
             .items_center()
-            .justify_between()
-            .px_4()
-            .pt(px(4.))
-            .pb_2()
-            .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child("Recent captures"))
+            .justify_end()
+            .gap(px(2.))
+            .px(px(8.))
+            .on_mouse_down(gpui::MouseButton::Left, |_, window, _| window.start_window_move())
+            .child(ui::icon_button("settings", IconName::Settings, "Settings").on_click(|_, _, cx| crate::prefs::open(cx)))
             .child(
-                div()
-                    .flex()
-                    .gap_1()
-                    .child(chrome::icon_button("settings", IconName::Settings, "Settings", cx).on_click(|_, _, cx| crate::prefs::open(cx)))
-                    .child(
-                        chrome::icon_button("clear", IconName::Trash, "Clear all", cx)
-                            .when(total == 0, |d| d.opacity(0.4))
-                            .on_click(cx.listener(|_, _, _, cx| {
-                                clear(cx);
-                                cx.notify();
-                            })),
-                    ),
-            );
-        let search = div().px_4().pb(px(10.)).child(
-            Input::new(&self.query)
-                .small()
-                .cleanable(true)
-                .prefix(Icon::new(IconName::Search).size(px(12.)).text_color(cx.theme().muted_foreground)),
-        );
+                ui::icon_button("clear", IconName::Trash, "Clear all")
+                    .when(total == 0, |d| d.opacity(0.4))
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        clear(cx);
+                        cx.notify();
+                    })),
+            )
+            .child(ui::close_button());
+        let header = div()
+            .px(px(16.))
+            .flex()
+            .flex_col()
+            .child(ui::page_header("History", (total > 0).then_some(total)))
+            .child(ui::page_subtitle("Screenshots, recordings and text, newest first."));
+        let search = div()
+            .mx(px(16.))
+            .mt(px(16.))
+            .mb(px(8.))
+            .h(px(ui::CONTROL_HEIGHT))
+            .px(px(10.))
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .rounded(px(8.))
+            .bg(theme::fill())
+            .child(ui::icon(IconName::Search, 14., theme::muted()))
+            .child(Input::new(&self.query).appearance(false).cleanable(true).flex_1().text_size(px(13.)));
         let body = if total == 0 {
-            Self::empty_state(IconName::RotateCcwClock, "No captures yet".into(), "Your screenshots, recordings and OCR text will show up here.", cx).into_any_element()
+            Self::empty_state(IconName::RotateCcwClock, "No captures yet".into(), "Your screenshots, recordings and OCR text will show up here.").into_any_element()
         } else if shown.is_empty() {
             let raw = self.query.read(cx).value();
-            Self::empty_state(IconName::TextSearch, format!("No captures match “{raw}”"), "Search looks at the text SlopShot read inside each screenshot.", cx).into_any_element()
+            Self::empty_state(IconName::TextSearch, format!("No captures match “{raw}”"), "Search looks at the text SlopShot read inside each screenshot.").into_any_element()
         } else {
-            let border = cx.theme().border;
             div()
                 .id("history-list")
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
-                .children(shown.into_iter().map(|(item, thumb)| {
-                    div().child(self.row(item, thumb, &q, cx)).child(div().ml(px(84.)).h(px(1.)).bg(border))
-                }))
+                .px(px(8.))
+                .pb(px(12.))
+                .children(shown.into_iter().map(|(item, thumb)| self.row(item, thumb, &q, cx).into_any_element()))
                 .into_any_element()
         };
         gpui_component::window_border().child(
@@ -522,14 +540,19 @@ impl Render for HistoryView {
                 .size_full()
                 .flex()
                 .flex_col()
-                .bg(cx.theme().background)
-                .text_color(cx.theme().foreground)
-                .text_sm()
-                .child(chrome::title_bar("Capture History", cx))
+                .bg(theme::bg())
+                .text_color(theme::text())
+                .text_size(px(13.))
+                .child(top)
                 .child(header)
                 .child(search)
-                .child(div().h(px(1.)).bg(cx.theme().border))
                 .child(body),
         )
     }
+}
+
+#[cfg(test)]
+pub(crate) fn seed(items: Vec<Item>, thumbs: Vec<(String, RgbaImage)>, cx: &mut App) {
+    let thumbs = thumbs.into_iter().map(|(id, image)| (id, preview::to_render_image(&image))).collect();
+    cx.set_global(History { items, thumbs });
 }

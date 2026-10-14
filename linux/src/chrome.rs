@@ -2,10 +2,9 @@
 //! Wayland clients, so each window draws its own inside a client-side shadow.
 
 use gpui::{App, Bounds, WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowOptions, div, prelude::*, px};
-use gpui_component::{ActiveTheme as _, Icon};
-use gpui_kit_assets::IconName;
 
 use crate::preview::csd_size;
+use crate::{theme, ui};
 
 /// Centered window of `size` content; resizable down to `min` when given.
 pub fn window_options(title: &str, size: (f32, f32), min: Option<(f32, f32)>, cx: &App) -> WindowOptions {
@@ -24,46 +23,16 @@ pub fn window_options(title: &str, size: (f32, f32), min: Option<(f32, f32)>, cx
     }
 }
 
-pub fn title_bar(title: impl Into<gpui::SharedString>, cx: &App) -> gpui::Stateful<gpui::Div> {
+pub fn title_bar(title: impl Into<gpui::SharedString>, _: &App) -> gpui::Stateful<gpui::Div> {
     div()
         .id("title-bar")
-        .h(px(32.))
+        .h(px(ui::TITLEBAR_HEIGHT))
         .flex_none()
         .relative()
         .flex()
         .items_center()
         .justify_center()
         .on_mouse_down(gpui::MouseButton::Left, |_, window, _| window.start_window_move())
-        .child(div().text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD).child(title.into()))
-        .child(
-            div()
-                .id("close")
-                .absolute()
-                .right(px(8.))
-                .size(px(22.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded_full()
-                .hover(|d| d.bg(cx.theme().secondary_hover))
-                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(|_, window, _| window.remove_window())
-                .child(Icon::new(IconName::X).size(px(14.)).text_color(cx.theme().muted_foreground)),
-        )
-}
-
-/// A borderless icon button that tints on hover, like SwiftUI's `.borderless` style.
-pub fn icon_button(id: impl Into<gpui::ElementId>, icon: IconName, tip: &'static str, cx: &App) -> gpui::Stateful<gpui::Div> {
-    let muted = cx.theme().muted_foreground;
-    let hover = cx.theme().secondary_hover;
-    div()
-        .id(id)
-        .size(px(24.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(5.))
-        .hover(move |d| d.bg(hover))
-        .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tip).build(window, cx))
-        .child(Icon::new(icon).size(px(14.)).text_color(muted))
+        .child(div().text_size(px(13.)).font_weight(gpui::FontWeight::MEDIUM).text_color(theme::text()).child(title.into()))
+        .child(div().absolute().right(px(6.)).child(ui::close_button()))
 }

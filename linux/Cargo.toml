@@ -74,6 +74,8 @@ assets = [
     ["data/icons/hicolor/128x128/apps/com.thanglb.slopshot.png", "usr/share/icons/hicolor/128x128/apps/", "644"],
     ["data/icons/hicolor/256x256/apps/com.thanglb.slopshot.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
     ["data/icons/hicolor/512x512/apps/com.thanglb.slopshot.png", "usr/share/icons/hicolor/512x512/apps/", "644"],
+    # Geist is compiled into the binary (src/theme.rs); the OFL travels with it.
+    ["data/fonts/OFL.txt", "usr/share/doc/slopshot/Geist-OFL.txt", "644"],
 ]
 
 [patch.crates-io]
