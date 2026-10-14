@@ -131,7 +131,7 @@ pub fn paint(
 }
 
 pub fn accent() -> Hsla {
-    crate::theme::accent()
+    crate::theme::Theme::get().accent
 }
 
 pub fn white(alpha: f32) -> Hsla {
@@ -147,10 +147,10 @@ pub fn hud(radius: f32) -> gpui::Div {
     use gpui::{Styled as _, div};
     div()
         .rounded(px(radius))
-        .bg(crate::theme::popover().opacity(0.97))
+        .bg(crate::popover::surface_bg(crate::theme::Theme::get()).opacity(0.97))
         .border_1()
         .border_color(white(0.08))
-        .text_color(crate::theme::text())
+        .text_color(crate::theme::Theme::get().text)
         .shadow(vec![gpui::BoxShadow {
             color: black(0.45),
             offset: point(px(0.), px(8.)),
@@ -173,12 +173,4 @@ pub fn paint_selection(frame: Bounds<Pixels>, grips: &[Point<Pixels>], window: &
         let sq = Bounds::new(*c - point(hs / 2., hs / 2.), size(hs, hs));
         window.paint_quad(gpui::quad(sq, px(2.), gpui::white(), px(1.5), accent(), gpui::BorderStyle::Solid));
     }
-}
-
-/// `window_border()` draws the client-side shadow inside the window, this far from
-/// each edge, so windows are this much bigger than their macOS content size.
-pub const CSD_SHADOW: f32 = 20.;
-
-pub fn csd_size(w: f32, h: f32) -> gpui::Size<gpui::Pixels> {
-    gpui::size(px(w + 2. * CSD_SHADOW), px(h + 2. * CSD_SHADOW))
 }

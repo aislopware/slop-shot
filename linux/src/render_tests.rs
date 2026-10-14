@@ -10,7 +10,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::{AnyWindowHandle, AppContext as _, Entity, HeadlessAppContext, Render, Size, Window, px, size};
-use gpui_component::Root;
 use image::{Rgba, RgbaImage};
 
 use crate::settings::Settings;
@@ -18,11 +17,11 @@ use crate::settings::Settings;
 fn app() -> HeadlessAppContext {
     let mut cx = HeadlessAppContext::with_platform(
         gpui_platform::text_system(),
-        Arc::new(crate::Assets),
+        Arc::new(crate::icons::Assets),
         gpui_platform::current_headless_renderer,
     );
     cx.update(|cx| {
-        gpui_component::init(cx);
+        gpui_base::init(cx);
         crate::theme::install(cx);
         cx.set_global(Settings::default());
     });
@@ -37,8 +36,7 @@ fn out_dir() -> PathBuf {
     dir
 }
 
-/// Opens `view` inside the same `Root` the app wraps every window in, draws it, and writes
-/// `<name>.png`.
+/// Opens `view` at the window size the app gives it, draws it, and writes `<name>.png`.
 fn render<V: Render + 'static>(
     name: &str,
     content: Size<gpui::Pixels>,
@@ -54,10 +52,7 @@ fn render_in<V: Render + 'static>(
     build: impl FnOnce(&mut Window, &mut gpui::App) -> Entity<V>,
 ) {
     let handle = cx
-        .open_window(crate::preview::csd_size(f32::from(content.width), f32::from(content.height)), |window, cx| {
-            let view = build(window, cx);
-            cx.new(|cx| Root::new(view, window, cx))
-        })
+        .open_window(content, build)
         .unwrap();
     let handle: AnyWindowHandle = handle.into();
     cx.run_until_parked();
@@ -93,7 +88,7 @@ fn render_editor() {
 }
 
 fn settings(name: &str, tab: crate::prefs::Tab) {
-    render(name, size(px(820.), px(560.)), move |window, cx| cx.new(|cx| crate::prefs::Prefs::new(tab, window, cx)));
+    render(name, size(px(900.), px(620.)), move |window, cx| cx.new(|cx| crate::prefs::Prefs::new(tab, window, cx)));
 }
 
 #[test]

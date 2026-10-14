@@ -16,9 +16,9 @@ use gpui::{
     Window, WindowBackgroundAppearance, WindowKind, WindowOptions, canvas, div, fill, point,
     prelude::*, px, size,
 };
-use gpui_kit_assets::IconName;
 use image::RgbaImage;
 
+use crate::icons;
 use crate::board::{self, Board};
 use crate::preview::{accent, black, hud, to_render_image, white};
 use crate::settings::Settings;
@@ -41,21 +41,21 @@ pub enum Purpose {
 }
 
 impl Purpose {
-    fn badge(self) -> (IconName, &'static str) {
+    fn badge(self) -> (&'static str, &'static str) {
         match self {
-            Purpose::Capture => (IconName::Scan, "Capture Area"),
-            Purpose::Text => (IconName::ScanText, "Capture Text"),
-            Purpose::Scroll => (IconName::ChevronsUpDown, "Scrolling Capture"),
-            Purpose::Record => (IconName::CircleDot, "Record Area"),
+            Purpose::Capture => (icons::FULL_SCREEN, "Capture Area"),
+            Purpose::Text => (icons::TEXT_SELECTION, "Capture Text"),
+            Purpose::Scroll => (icons::SORT_VERTICAL, "Scrolling Capture"),
+            Purpose::Record => (icons::VIDEOCAMERA_RECORD, "Record Area"),
         }
     }
 
-    fn confirm(self) -> (IconName, &'static str) {
+    fn confirm(self) -> (&'static str, &'static str) {
         match self {
-            Purpose::Capture => (IconName::Camera, "Capture"),
-            Purpose::Text => (IconName::ScanText, "Read Text"),
-            Purpose::Scroll => (IconName::ChevronsUpDown, "Start Scrolling Capture"),
-            Purpose::Record => (IconName::CircleDot, "Start Recording"),
+            Purpose::Capture => (icons::CAMERA, "Capture"),
+            Purpose::Text => (icons::TEXT_SELECTION, "Read Text"),
+            Purpose::Scroll => (icons::SORT_VERTICAL, "Start Scrolling Capture"),
+            Purpose::Record => (icons::VIDEOCAMERA_RECORD, "Start Recording"),
         }
     }
 }
@@ -1245,7 +1245,7 @@ fn hint_panel(title: &'static str, subtitle: &'static str, opacity: f32, height:
         .into_any_element()
 }
 
-fn badge(icon: IconName, title: &'static str, opacity: f32) -> AnyElement {
+fn badge(icon: &'static str, title: &'static str, opacity: f32) -> AnyElement {
     div()
         .absolute()
         .top(px(58. - 15.))
@@ -1334,8 +1334,8 @@ impl Render for OverlayView {
             .id("overlay")
             .track_focus(&self.focus)
             .size_full()
-            // No gpui-component Root here to apply the theme's font.
-            .font_family(gpui_component::Theme::global(cx).font_family.clone())
+            // Overlays skip chrome::frame, which sets the theme font elsewhere.
+            .font_family(crate::theme::Theme::get().font_sans.clone())
             .relative()
             .opacity(window_alpha)
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
@@ -1452,7 +1452,7 @@ impl Render for OverlayView {
                     1.,
                     sh,
                 ));
-                root = root.child(badge(IconName::Pipette, "Pick Color", badge_alpha));
+                root = root.child(badge(icons::PIPETTE, "Pick Color", badge_alpha));
                 if let Some(p) = pointer {
                     let side = 152.;
                     let mut x = p.0 + 26.;
@@ -1586,7 +1586,7 @@ fn action_bar(session: &Entity<Session>, r: R, sw: f32, sh: f32, alpha: f32, cx:
             .cursor(CursorStyle::PointingHand)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(move |_, _, cx| cancel(&session, cx))
-            .child(board::icon(IconName::X, 13., gpui::white()))
+            .child(board::icon(icons::CLOSE, 13., gpui::white()))
     };
     let confirm_button = {
         let session = session.clone();
@@ -1644,13 +1644,13 @@ fn inline_editor(inl: &Inline, sw: f32, sh: f32, cx: &App) -> AnyElement {
         })
         .w(px(30.))
         .h(px(28.))
-        .child(board::icon(IconName::X, 13., gpui::hsla(0., 0., 0.85, 1.)));
+        .child(board::icon(icons::CLOSE, 13., gpui::hsla(0., 0., 0.85, 1.)));
         let save_b = board::hud_button("inline-save", "Save (Ctrl+S)", move |_, window, cx| {
             window.dispatch_keystroke(gpui::Keystroke::parse("ctrl-s").unwrap(), cx);
         })
         .w(px(30.))
         .h(px(28.))
-        .child(board::icon(IconName::Download, 13., gpui::hsla(0., 0., 0.85, 1.)));
+        .child(board::icon(icons::DOWNLOAD_MINIMALISTIC, 13., gpui::hsla(0., 0., 0.85, 1.)));
         let copy_b = board::tinted_button("inline-copy", "Copy and close (Ctrl+C or ↩)", accent().opacity(0.85), move |_, window, cx| {
             window.dispatch_keystroke(gpui::Keystroke::parse("ctrl-c").unwrap(), cx);
         })
@@ -1661,7 +1661,7 @@ fn inline_editor(inl: &Inline, sw: f32, sh: f32, cx: &App) -> AnyElement {
         .text_size(px(12.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(gpui::white())
-        .child(board::icon(IconName::Copy, 12., gpui::white()))
+        .child(board::icon(icons::COPY, 12., gpui::white()))
         .child("Copy");
         board::pill().child(cancel_b).child(save_b).child(copy_b)
     };

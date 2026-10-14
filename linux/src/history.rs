@@ -9,14 +9,15 @@ use gpui::{
     AnyWindowHandle, App, AppContext as _, Context, Entity, Global, KeyDownEvent, ObjectFit, RenderImage, Window,
     div, img, prelude::*, px,
 };
-use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_kit_assets::IconName;
+use gpui_base::input::{Input, InputEvent, InputState};
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization as _;
 
+use crate::icons::{self, icon};
 use crate::settings::{Settings, data_dir};
-use crate::{chrome, editor, output, preview, theme, ui};
+use crate::theme::Theme;
+use crate::{chrome, editor, motion, output, preview, ui, widgets};
 
 const MAX_ITEMS: usize = 100;
 const THUMB_SIDE: u32 = 240;
@@ -332,8 +333,7 @@ pub fn open_window(cx: &mut App) {
     }
     let options = chrome::window_options("Capture History", (440., 560.), Some((360., 360.)), cx);
     match cx.open_window(options, |window, cx| {
-        let view = cx.new(|cx| HistoryView::new(window, cx));
-        cx.new(|cx| gpui_component::Root::new(view, window, cx))
+        cx.new(|cx| HistoryView::new(window, cx))
     }) {
         Ok(handle) => cx.set_global(HistoryWindow(handle.into())),
         Err(err) => log::error!("opening the history: {err:#}"),
@@ -365,7 +365,8 @@ impl HistoryView {
         }
     }
 
-    fn empty_state(icon: IconName, title: String, caption: &'static str) -> gpui::Div {
+    fn empty_state(glyph: &'static str, title: String, caption: &'static str) -> gpui::Div {
+        let t = Theme::get();
         div()
             .flex_1()
             .flex()
@@ -374,24 +375,25 @@ impl HistoryView {
             .justify_center()
             .gap(px(6.))
             .pb(px(40.))
-            .child(ui::icon(icon, 28., theme::faint()))
-            .child(div().mt(px(8.)).text_size(px(15.)).font_weight(gpui::FontWeight::MEDIUM).text_color(theme::text()).child(title))
-            .child(div().max_w(px(260.)).text_center().text_size(px(12.5)).text_color(theme::muted()).child(caption))
+            .child(icon(glyph).size(px(28.)).text_color(t.text_faint))
+            .child(div().mt(px(8.)).text_size(px(15.)).font_weight(gpui::FontWeight::MEDIUM).text_color(t.text).child(title))
+            .child(div().max_w(px(260.)).text_center().text_size(px(12.5)).text_color(t.text_muted).child(caption))
     }
 
     fn row(&self, item: Item, thumb: Option<Arc<RenderImage>>, q: &str, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = Theme::get();
         let hovering = self.hovered.as_deref() == Some(item.id.as_str());
         let snippet = (!q.is_empty()).then(|| item.snippet(q)).flatten();
         let fallback = match item.kind {
-            Kind::Text => IconName::TextAlignStart,
-            Kind::Color => IconName::Pipette,
-            _ => IconName::Image,
+            Kind::Text => icons::DOCUMENT_TEXT,
+            Kind::Color => icons::PIPETTE,
+            _ => icons::GALLERY,
         };
         let exists = item.file_exists();
         let id = item.id.clone();
-        let action = |name: &'static str, icon: IconName, tip: &'static str, f: fn(&Item, &mut App), item: &Item, cx: &mut Context<Self>| {
+        let action = |name: &'static str, glyph: &'static str, tip: &'static str, f: fn(&Item, &mut App), item: &Item, cx: &mut Context<Self>| {
             let item = item.clone();
-            ui::icon_button(gpui::SharedString::from(format!("{name}-{}", item.id)), icon, tip).on_click(cx.listener(move |_, _, _, cx| {
+            ui::icon_button(format!("{name}-{}", item.id), glyph, tip).on_click(cx.listener(move |_, _, _, cx| {
                 f(&item, cx);
                 cx.notify();
             }))
@@ -404,7 +406,7 @@ impl HistoryView {
             .px(px(8.))
             .py(px(8.))
             .rounded(px(10.))
-            .when(hovering, |d| d.bg(theme::ink(0.05)))
+            .when(hovering, |d| d.bg(t.glass_hover()))
             .on_hover(cx.listener(move |this, hover: &bool, _, cx| {
                 this.hovered = hover.then(|| id.clone());
                 cx.notify();
@@ -420,15 +422,15 @@ impl HistoryView {
                     .justify_center()
                     .rounded(px(6.))
                     .overflow_hidden()
-                    .bg(theme::block())
+                    .bg(widgets::block_fill(t))
                     .border_1()
-                    .border_color(theme::ink(0.08))
+                    .border_color(t.border)
                     .child(match thumb {
-                        Some(t) => img(t).size_full().object_fit(ObjectFit::Cover).into_any_element(),
-                        None => ui::icon(fallback, 16., theme::muted()).into_any_element(),
+                        Some(thumb) => img(thumb).size_full().object_fit(ObjectFit::Cover).into_any_element(),
+                        None => icon(fallback).size(px(16.)).text_color(t.text_muted).into_any_element(),
                     })
                     .when(item.kind == Kind::Video, |d| {
-                        d.child(div().absolute().inset_0().flex().items_center().justify_center().child(ui::icon(IconName::CirclePlay, 18., gpui::white())))
+                        d.child(div().absolute().inset_0().flex().items_center().justify_center().child(icon(icons::PLAY_CIRCLE).size(px(18.)).text_color(gpui::white())))
                     }),
             )
             .child(
@@ -443,32 +445,34 @@ impl HistoryView {
                             .flex()
                             .items_baseline()
                             .gap(px(8.))
-                            .child(div().text_size(px(13.)).font_weight(gpui::FontWeight::MEDIUM).text_color(theme::text()).child(item.title()))
-                            .child(div().text_size(px(11.5)).text_color(theme::faint()).child(relative(item.date))),
+                            .child(div().text_size(px(13.)).font_weight(gpui::FontWeight::MEDIUM).text_color(t.text).child(item.title()))
+                            .child(div().text_size(px(11.5)).text_color(t.text_faint).child(relative(item.date))),
                     )
-                    .child(div().text_size(px(12.)).truncate().text_color(theme::muted()).child(item.subtitle.clone()))
-                    .children(snippet.map(|s| div().text_size(px(11.5)).truncate().text_color(theme::faint()).child(s))),
+                    .child(div().text_size(px(12.)).truncate().text_color(t.text_muted).child(item.subtitle.clone()))
+                    .children(snippet.map(|s| div().text_size(px(11.5)).truncate().text_color(t.text_faint).child(s))),
             )
             .child(
                 div()
                     .flex()
                     .gap(px(2.))
                     .when(!hovering, |d| d.opacity(0.))
-                    .child(action("copy", IconName::Copy, "Copy", copy, &item, cx))
-                    .when(matches!(item.kind, Kind::Image | Kind::Video) && exists, |d| d.child(action("save", IconName::Download, "Save", save, &item, cx)))
+                    .child(action("copy", icons::COPY, "Copy", copy, &item, cx))
+                    .when(matches!(item.kind, Kind::Image | Kind::Video) && exists, |d| d.child(action("save", icons::DOWNLOAD_MINIMALISTIC, "Save", save, &item, cx)))
                     .map(|d| match item.kind {
-                        Kind::Image if exists => d.child(action("edit", IconName::SquarePen, "Edit", edit, &item, cx)),
-                        Kind::Video if exists => d.child(action("play", IconName::Play, "Play", |i, cx| crate::video::play(i.file.clone().unwrap(), cx), &item, cx)),
-                        Kind::Text => d.child(action("open", IconName::ScanText, "Open", edit, &item, cx)),
+                        Kind::Image if exists => d.child(action("edit", icons::PEN_NEW_SQUARE, "Edit", edit, &item, cx)),
+                        Kind::Video if exists => d.child(action("play", icons::PLAY, "Play", |i, cx| crate::video::play(i.file.clone().unwrap(), cx), &item, cx)),
+                        Kind::Text => d.child(action("open", icons::TEXT_SELECTION, "Open", edit, &item, cx)),
                         _ => d,
                     })
-                    .child(action("delete", IconName::Trash, "Delete", |i, cx| remove(&i.id, cx), &item, cx)),
+                    .child(action("delete", icons::TRASH_BIN_MINIMALISTIC, "Delete", |i, cx| remove(&i.id, cx), &item, cx)),
             )
     }
 }
 
 impl Render for HistoryView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        motion::window_frame(window);
+        let t = Theme::get();
         let q = fold(self.query.read(cx).value().trim());
         let all = items(cx);
         let total = all.len();
@@ -476,22 +480,21 @@ impl Render for HistoryView {
             .into_iter()
             .filter(|i| q.is_empty() || i.matches(&q))
             .map(|i| {
-                let t = store(cx).thumbnail(&i.id);
-                (i, t)
+                let thumb = store(cx).thumbnail(&i.id);
+                (i, thumb)
             })
             .collect();
-        let top = div()
-            .h(px(ui::TITLEBAR_HEIGHT))
+        let top = chrome::drag_strip("history-titlebar")
+            .h(px(Theme::TITLEBAR_HEIGHT))
             .flex_none()
             .flex()
             .items_center()
             .justify_end()
             .gap(px(2.))
             .px(px(8.))
-            .on_mouse_down(gpui::MouseButton::Left, |_, window, _| window.start_window_move())
-            .child(ui::icon_button("settings", IconName::Settings, "Settings").on_click(|_, _, cx| crate::prefs::open(cx)))
+            .child(ui::icon_button("settings", icons::SETTINGS, "Settings").on_click(|_, _, cx| crate::prefs::open(cx)))
             .child(
-                ui::icon_button("clear", IconName::Trash, "Clear all")
+                ui::icon_button("clear", icons::TRASH_BIN_MINIMALISTIC, "Clear all")
                     .when(total == 0, |d| d.opacity(0.4))
                     .on_click(cx.listener(|_, _, _, cx| {
                         clear(cx);
@@ -503,26 +506,32 @@ impl Render for HistoryView {
             .px(px(16.))
             .flex()
             .flex_col()
-            .child(ui::page_header("History", (total > 0).then_some(total)))
-            .child(ui::page_subtitle("Screenshots, recordings and text, newest first."));
+            .child(widgets::page_header(t, "History", (total > 0).then_some(total)))
+            .child(widgets::page_subtitle(t, "Screenshots, recordings and text, newest first."));
         let search = div()
             .mx(px(16.))
             .mt(px(16.))
             .mb(px(8.))
-            .h(px(ui::CONTROL_HEIGHT))
+            .h(px(widgets::SELECT_HEIGHT))
             .px(px(10.))
             .flex()
             .items_center()
             .gap(px(8.))
             .rounded(px(8.))
-            .bg(theme::fill())
-            .child(ui::icon(IconName::Search, 14., theme::muted()))
-            .child(Input::new(&self.query).appearance(false).cleanable(true).flex_1().text_size(px(13.)));
+            .bg(widgets::select_fill(t, false))
+            .text_size(px(13.))
+            .child(icon(icons::MAGNIFER).size(px(14.)).text_color(t.text_muted))
+            .child(div().flex_1().min_w_0().child(Input::new(&self.query)))
+            .when(!self.query.read(cx).value().is_empty(), |d| {
+                d.child(ui::icon_button("clear-search", icons::CLOSE, "Clear").on_click(cx.listener(|this, _, window, cx| {
+                    this.query.update(cx, |q, cx| q.set_value("", window, cx));
+                })))
+            });
         let body = if total == 0 {
-            Self::empty_state(IconName::RotateCcwClock, "No captures yet".into(), "Your screenshots, recordings and OCR text will show up here.").into_any_element()
+            Self::empty_state(icons::HISTORY, "No captures yet".into(), "Your screenshots, recordings and OCR text will show up here.").into_any_element()
         } else if shown.is_empty() {
             let raw = self.query.read(cx).value();
-            Self::empty_state(IconName::TextSearch, format!("No captures match “{raw}”"), "Search looks at the text SlopShot read inside each screenshot.").into_any_element()
+            Self::empty_state(icons::MAGNIFER, format!("No captures match “{raw}”"), "Search looks at the text SlopShot read inside each screenshot.").into_any_element()
         } else {
             div()
                 .id("history-list")
@@ -534,20 +543,17 @@ impl Render for HistoryView {
                 .children(shown.into_iter().map(|(item, thumb)| self.row(item, thumb, &q, cx).into_any_element()))
                 .into_any_element()
         };
-        gpui_component::window_border().child(
-            div()
-                .on_key_down(cx.listener(Self::key_down))
-                .size_full()
-                .flex()
-                .flex_col()
-                .bg(theme::bg())
-                .text_color(theme::text())
-                .text_size(px(13.))
-                .child(top)
-                .child(header)
-                .child(search)
-                .child(body),
-        )
+        let content = div()
+            .on_key_down(cx.listener(Self::key_down))
+            .size_full()
+            .flex()
+            .flex_col()
+            .text_size(px(13.))
+            .child(top)
+            .child(header)
+            .child(search)
+            .child(body);
+        chrome::frame(window, true, t.surface, content)
     }
 }
 

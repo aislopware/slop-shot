@@ -1,12 +1,10 @@
 //! Modal-style alert window, the counterpart of the NSAlerts the macOS app shows for
 //! capture errors and missing permissions.
 
-use gpui::{
-    App, AppContext as _, Bounds, Context, FocusHandle, KeyDownEvent, Task, Window, WindowBounds,
-    WindowKind, WindowOptions, div, img, prelude::*, px, size,
-};
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::{ActiveTheme as _, Disableable as _, Root};
+use gpui::{App, AppContext as _, Context, FocusHandle, KeyDownEvent, Task, Window, WindowKind, div, img, prelude::*, px, size};
+
+use crate::theme::Theme;
+use crate::{chrome, motion, popover};
 
 pub struct Alert {
     pub title: String,
@@ -35,25 +33,14 @@ pub fn show(alert: Alert, on_choice: impl FnOnce(usize, &mut App) + 'static, cx:
 /// returns finishes, for work that needs a SlopShot window to have focus meanwhile.
 pub fn show_holding(alert: Alert, on_choice: impl FnOnce(usize, &mut App) -> Option<Task<Then>> + 'static, cx: &mut App) {
     // AlertView fits the height to the wrapped text once it is laid out.
-    let bounds = Bounds::centered(None, size(px(440.), px(160.)), cx);
-    let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
-        titlebar: Some(gpui::TitlebarOptions { title: Some(alert.title.clone().into()), ..Default::default() }),
-        kind: WindowKind::Dialog,
-        is_resizable: false,
-        is_minimizable: false,
-        focus: true,
-        app_id: Some(crate::APP_ID.into()),
-        ..Default::default()
-    };
+    let options = gpui::WindowOptions { kind: WindowKind::Dialog, ..chrome::window_options(&alert.title, (440., 160.), None, cx) };
     let title = alert.title.clone();
     let result = cx.open_window(options, |window, cx| {
-        let view = cx.new(|cx| {
+        cx.new(|cx| {
             let focus = cx.focus_handle();
             window.focus(&focus, cx);
             AlertView { alert, on_choice: Some(Box::new(on_choice)), focus, holding: false }
-        });
-        cx.new(|cx| Root::new(view, window, cx))
+        })
     });
     match result {
         Ok(_) => log::debug!("alert opened ({title})"),
@@ -109,33 +96,41 @@ impl AlertView {
 }
 
 impl Render for AlertView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        motion::window_frame(window);
+        let t = Theme::get();
+        let holding = self.holding;
         let buttons = self.alert.buttons.iter().enumerate().rev().map(|(i, label)| {
-            let button = Button::new(("alert-button", i)).label(*label).min_w(px(88.)).disabled(self.holding);
-            let button = if i == 0 { button.primary() } else { button };
-            button.on_click(cx.listener(move |this, _, window, cx| this.choose(i, window, cx)))
+            let button = if i == 0 {
+                popover::btn_primary(t, *label)
+            } else {
+                popover::btn_ghost(t, *label, format!("alert-button-{i}"))
+            };
+            button
+                .id(("alert-button", i))
+                .min_w(px(88.))
+                .flex()
+                .justify_center()
+                .when(holding, |b| b.opacity(0.5).cursor_default())
+                .on_click(cx.listener(move |this, _, window, cx| this.choose(i, window, cx)))
         });
-        div()
+        let content = div()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key_down))
             .size_full()
-            .bg(cx.theme().background)
-            .text_color(cx.theme().foreground)
             .on_children_prepainted(|content, window, _| {
                 let Some(content) = content.first() else { return };
                 let viewport = window.viewport_size();
-                // The client-side frame insets every side alike; the width shows by how much.
-                let height = content.size.height + (viewport.width - content.size.width);
-                if (height - viewport.height).abs() > px(1.) {
-                    window.resize(size(viewport.width, height));
+                if (content.size.height - viewport.height).abs() > px(1.) {
+                    window.resize(size(viewport.width, content.size.height));
                 }
             })
             .child(
                 div()
                     .w_full()
-                    .p_5()
+                    .p(px(20.))
                     .flex()
-                    .gap_4()
+                    .gap(px(16.))
                     .child(img("app-icon.png").size(px(64.)).flex_none())
                     .child(
                         div()
@@ -143,11 +138,12 @@ impl Render for AlertView {
                             .min_w_0()
                             .flex()
                             .flex_col()
-                            .gap_2()
-                            .child(div().font_weight(gpui::FontWeight::BOLD).child(self.alert.title.clone()))
-                            .child(div().text_sm().whitespace_normal().child(self.alert.message.clone()))
-                            .child(div().pt_2().flex().justify_end().gap_2().children(buttons)),
+                            .gap(px(8.))
+                            .child(popover::dialog_title(t, self.alert.title.clone()))
+                            .child(popover::dialog_body(t, self.alert.message.clone()).whitespace_normal())
+                            .child(div().pt(px(8.)).flex().justify_end().gap(px(8.)).children(buttons)),
                     ),
-            )
+            );
+        chrome::frame(window, false, t.surface, content)
     }
 }

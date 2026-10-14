@@ -18,18 +18,17 @@ use gpui::{
     App, AppContext as _, Context, ExternalPaths, ObjectFit, PathPromptOptions, RenderImage, SharedString, Window,
     div, img, prelude::*, px,
 };
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::progress::Progress;
-use gpui_component::tooltip::Tooltip;
-use gpui_component::{Icon, Sizable as _};
-use gpui_kit_assets::IconName;
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
 use unicode_normalization::UnicodeNormalization as _;
 
 use crate::frames::{self, Frames};
+use crate::icons::{self, icon};
 use crate::preview::{accent, to_render_image, white};
 use crate::settings::{Settings, data_dir};
+use crate::theme::Theme;
+use crate::ui;
+use crate::widgets::{self, ActionTone, text_tooltip};
 
 pub const DEFAULT_STORE: &str = "https://pub-def5854c65c3430f9a38ca0585e79c1e.r2.dev";
 
@@ -638,14 +637,14 @@ impl StickerPicker {
                 .bg(white(0.05))
                 .cursor_pointer()
                 .hover(|d| d.bg(white(0.12)))
-                .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                .tooltip(text_tooltip(tip.clone()))
                 .on_click(cx.listener(move |this, _, window, cx| this.pick(&s, window, cx)))
                 .flex()
                 .items_center()
                 .justify_center()
                 .child(match thumb {
                     Some(Some((image, _))) => img(image.clone()).size(px(56.)).object_fit(ObjectFit::Contain).into_any_element(),
-                    Some(None) => Icon::new(IconName::TriangleAlert).size(px(16.)).text_color(white(0.5)).into_any_element(),
+                    Some(None) => icon(icons::DANGER_TRIANGLE).size(px(16.)).text_color(white(0.5)).into_any_element(),
                     None => div().into_any_element(),
                 })
                 // The grid shows only first frames, so moving ones need a mark.
@@ -703,7 +702,7 @@ impl StickerPicker {
             .items_center()
             .justify_center()
             .gap(px(10.))
-            .child(Icon::new(IconName::Sticker).size(px(30.)).text_color(white(0.5)))
+            .child(icon(icons::STICKER_SMILE_SQUARE).size(px(30.)).text_color(white(0.5)))
             .child(div().text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD).child("No sticker packs yet"))
             .child(
                 div()
@@ -714,9 +713,7 @@ impl StickerPicker {
                     .child("Drop a folder of images here, or use Import — each folder becomes one pack."),
             )
             .child(
-                Button::new("browse")
-                    .small()
-                    .label("Browse packs…")
+                button("browse", None, Some("Browse packs…"), false)
                     .on_click(cx.listener(|this, _, _, cx| this.show_store(cx))),
             )
             .into_any_element()
@@ -757,7 +754,7 @@ impl StickerPicker {
                         .bg(white(0.05))
                         .child(match cover {
                             Some(c) => img(c).size(px(40.)).object_fit(ObjectFit::Contain).into_any_element(),
-                            None => Icon::new(IconName::Package).size(px(16.)).text_color(white(0.35)).into_any_element(),
+                            None => icon(icons::BOX).size(px(16.)).text_color(white(0.35)).into_any_element(),
                         }),
                 )
                 .child(
@@ -773,7 +770,7 @@ impl StickerPicker {
                 .child(self.store_action(p, installed, cx))
         }).collect::<Vec<_>>();
         let overlay = if self.store.loading && packs.is_empty() {
-            Some(Icon::new(IconName::LoaderCircle).size(px(16.)).text_color(white(0.6)).into_any_element())
+            Some(icon(icons::LOADER).size(px(16.)).text_color(white(0.6)).into_any_element())
         } else if let Some(err) = self.store.error.clone() {
             Some(
                 div()
@@ -781,12 +778,10 @@ impl StickerPicker {
                     .flex_col()
                     .items_center()
                     .gap(px(8.))
-                    .child(Icon::new(IconName::WifiOff).size(px(26.)).text_color(white(0.5)))
+                    .child(icon(icons::WIFI_OFF).size(px(26.)).text_color(white(0.5)))
                     .child(div().text_size(px(11.)).text_color(white(0.55)).child(err))
                     .child(
-                        Button::new("retry-store")
-                            .small()
-                            .label("Try again")
+                        button("retry-store", None, Some("Try again"), false)
                             .on_click(cx.listener(|this, _, _, cx| this.refresh_store(cx))),
                     )
                     .into_any_element(),
@@ -809,14 +804,12 @@ impl StickerPicker {
         let id = SharedString::from(format!("get-{}", pack.id));
         match self.store.status.get(&pack.id) {
             // The manifest gives the size, so this is a real bar, not a spinner.
-            Some(Status::Downloading(p)) => div().w(px(64.)).child(Progress::new(id).value((*p * 100.) as f32)).into_any_element(),
-            Some(Status::Installing) => Icon::new(IconName::LoaderCircle).size(px(14.)).text_color(white(0.6)).into_any_element(),
+            Some(Status::Downloading(p)) => div().w(px(64.)).child(ui::progress(*p as f32)).into_any_element(),
+            Some(Status::Installing) => icon(icons::LOADER).size(px(14.)).text_color(white(0.6)).into_any_element(),
             Some(Status::Failed(msg)) => {
                 let (pack, msg) = (pack.clone(), SharedString::from(msg.clone()));
-                Button::new(id)
-                    .small()
-                    .label("Retry")
-                    .tooltip(msg)
+                button(id, None, Some("Retry"), false)
+                    .tooltip(text_tooltip(msg))
                     .on_click(cx.listener(move |this, _, _, cx| this.get_pack(&pack, cx)))
                     .into_any_element()
             }
@@ -826,14 +819,12 @@ impl StickerPicker {
                 .gap(px(3.))
                 .text_size(px(10.))
                 .text_color(white(0.55))
-                .child(Icon::new(IconName::Check).size(px(10.)))
+                .child(icon(icons::CHECK).size(px(10.)).text_color(white(0.55)))
                 .child("Installed")
                 .into_any_element(),
             None => {
                 let pack = pack.clone();
-                Button::new(id)
-                    .small()
-                    .label("Get")
+                button(id, None, Some("Get"), false)
                     .on_click(cx.listener(move |this, _, _, cx| this.get_pack(&pack, cx)))
                     .into_any_element()
             }
@@ -845,11 +836,7 @@ impl StickerPicker {
         if self.show_store {
             return bar
                 .child(
-                    Button::new("my-packs")
-                        .small()
-                        .ghost()
-                        .icon(IconName::ChevronLeft)
-                        .label("My packs")
+                    button("my-packs", Some(icons::ALT_ARROW_LEFT), Some("My packs"), true)
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.show_store = false;
                             cx.notify();
@@ -857,35 +844,39 @@ impl StickerPicker {
                 )
                 .child(div().flex_1())
                 .child(
-                    Button::new("refresh-store")
-                        .small()
-                        .ghost()
-                        .icon(IconName::RefreshCw)
-                        .tooltip("Check for new packs")
+                    button("refresh-store", Some(icons::REFRESH), None, true)
+                        .tooltip(text_tooltip("Check for new packs"))
                         .on_click(cx.listener(|this, _, _, cx| this.refresh_store(cx))),
                 );
         }
-        bar.child(Button::new("import").small().label("Import pack…").on_click(cx.listener(|this, _, _, cx| this.import(cx))))
-            .child(Button::new("open-folder").small().label("Open folder").on_click(cx.listener(|this, _, _, cx| this.open_folder(cx))))
+        bar.child(button("import", None, Some("Import pack…"), false).on_click(cx.listener(|this, _, _, cx| this.import(cx))))
+            .child(button("open-folder", None, Some("Open folder"), false).on_click(cx.listener(|this, _, _, cx| this.open_folder(cx))))
             .when(!self.packs.is_empty(), |d| {
                 d.child(
-                    Button::new("get-packs")
-                        .small()
-                        .icon(IconName::CircleArrowDown)
-                        .label("Get packs")
+                    button("get-packs", Some(icons::ROUND_ARROW_DOWN), Some("Get packs"), false)
                         .on_click(cx.listener(|this, _, _, cx| this.show_store(cx))),
                 )
             })
             .child(div().flex_1())
             .child(
-                Button::new("rescan")
-                    .small()
-                    .ghost()
-                    .icon(IconName::RefreshCw)
-                    .tooltip("Rescan the stickers folder")
+                button("rescan", Some(icons::REFRESH), None, true)
+                    .tooltip(text_tooltip("Rescan the stickers folder"))
                     .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
             )
     }
+}
+
+/// A compact action for the picker's popover: filled, or quiet when `ghost`.
+fn button(id: impl Into<gpui::ElementId>, glyph: Option<&'static str>, label: Option<&'static str>, ghost: bool) -> gpui::Stateful<gpui::Div> {
+    let t = Theme::get();
+    widgets::action_button(t, if ghost { ActionTone::Quiet } else { ActionTone::Filled })
+        .id(id)
+        .min_h(px(26.))
+        .py(px(3.))
+        .px(px(if label.is_some() { 8. } else { 5. }))
+        .text_size(px(12.))
+        .children(glyph.map(|g| icon(g).size(px(14.)).text_color(t.text_muted)))
+        .children(label)
 }
 
 impl Render for StickerPicker {

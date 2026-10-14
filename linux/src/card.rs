@@ -17,10 +17,9 @@ use gpui::{
     ObjectFit, RenderImage, StyledImage as _, Window, WindowBackgroundAppearance,
     WindowBounds, WindowKind, WindowOptions, div, hsla, img, point, prelude::*, px, size,
 };
-use gpui_component::Icon;
-use gpui_kit_assets::IconName;
 use serde::{Deserialize, Serialize};
 
+use crate::icons;
 use crate::settings::PreviewSide;
 
 pub const HOST_ARG: &str = "--card-host";
@@ -236,8 +235,8 @@ pub fn host_main() {
             }
         }
     });
-    gpui_platform::application().with_assets(crate::Assets).run(move |cx: &mut App| {
-        gpui_component::init(cx);
+    gpui_platform::application().with_assets(crate::icons::Assets).run(move |cx: &mut App| {
+        gpui_base::init(cx);
         crate::theme::install(cx);
         cx.spawn(async move |cx| {
             while let Ok(request) = rx.recv().await {
@@ -532,7 +531,7 @@ impl Card {
     }
 }
 
-fn circle(id: &'static str, icon: IconName, on: impl Fn(&mut Card, &mut Context<Card>) + 'static, cx: &mut Context<Card>) -> impl IntoElement {
+fn circle(id: &'static str, icon: &'static str, on: impl Fn(&mut Card, &mut Context<Card>) + 'static, cx: &mut Context<Card>) -> impl IntoElement {
     div()
             .id(id)
             .cursor_pointer()
@@ -545,7 +544,7 @@ fn circle(id: &'static str, icon: IconName, on: impl Fn(&mut Card, &mut Context<
             .hover(|s| s.bg(hsla(0., 0., 0.12, 0.62)))
             .active(|s| s.bg(hsla(0., 0., 0., 0.7)))
             .text_color(gpui::white())
-            .child(Icon::new(icon).size(px(11.)))
+            .child(icons::icon(icon).size(px(11.)).text_color(gpui::white()))
             .on_click(cx.listener(move |this, _, _, cx| {
                 cx.stop_propagation();
                 on(this, cx);
@@ -554,7 +553,7 @@ fn circle(id: &'static str, icon: IconName, on: impl Fn(&mut Card, &mut Context<
 
 fn capsule(id: &'static str, label: &'static str, ticked: bool, cx: &mut Context<Card>) -> impl IntoElement {
     let content = if ticked {
-        div().child(Icon::new(IconName::CircleCheck).size(px(15.))).into_any_element()
+        div().child(icons::icon(icons::CHECK_CIRCLE).size(px(15.)).text_color(hsla(0., 0., 0., 0.85))).into_any_element()
     } else {
         div().child(label).into_any_element()
     };
@@ -607,16 +606,16 @@ impl Render for Card {
                     .child(capsule("copy", "Copy", ticked == Some("copy"), cx))
                     .child(capsule("save", "Save", ticked == Some("save"), cx)),
             )
-            .child(div().absolute().top(px(6.)).left(px(6.)).child(circle("discard", IconName::X, |this, cx| this.dismiss(cx), cx)))
+            .child(div().absolute().top(px(6.)).left(px(6.)).child(circle("discard", icons::CLOSE, |this, cx| this.dismiss(cx), cx)))
             .child(div().absolute().top(px(6.)).right(px(6.)).child(if self.video {
-                circle("quick-look", IconName::Eye, |_, _| emit(Event::Edit), cx).into_any_element()
+                circle("quick-look", icons::EYE, |_, _| emit(Event::Edit), cx).into_any_element()
             } else {
                 div()
                     .rounded_full()
                     .when(pinned, |d| d.bg(hsla(0., 0., 1., 0.35)))
                     .child(circle(
                         "pin",
-                        if pinned { IconName::PinOff } else { IconName::Pin },
+                        if pinned { icons::PIN_OFF } else { icons::PIN },
                         |this, cx| {
                             this.pinned = !this.pinned;
                             if this.pinned {
@@ -631,7 +630,7 @@ impl Render for Card {
             .child(div().absolute().bottom(px(6.)).left(px(6.)).child(if self.video {
                 circle(
                     "trim",
-                    IconName::Scissors,
+                    icons::SCISSORS,
                     |this, cx| {
                         emit(Event::Trim);
                         this.dismiss(cx);
@@ -642,7 +641,7 @@ impl Render for Card {
             } else {
                 circle(
                     "edit",
-                    IconName::SquarePen,
+                    icons::PEN_NEW_SQUARE,
                     |this, cx| {
                         emit(Event::Edit);
                         this.dismiss(cx);
@@ -651,7 +650,7 @@ impl Render for Card {
                 )
                 .into_any_element()
             }))
-            .child(div().absolute().bottom(px(6.)).right(px(6.)).child(circle("share", IconName::Share2, |_, _| emit(Event::Share), cx)));
+            .child(div().absolute().bottom(px(6.)).right(px(6.)).child(circle("share", icons::SHARE, |_, _| emit(Event::Share), cx)));
 
         let card = div()
             .id("card")
@@ -690,7 +689,7 @@ impl Render for Card {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(Icon::new(IconName::Play).size(px(17.)).text_color(hsla(0., 0., 1., 0.95))),
+                            .child(icons::icon(icons::PLAY).size(px(17.)).text_color(hsla(0., 0., 1., 0.95))),
                     ),
                 )
             })

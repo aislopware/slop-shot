@@ -5,18 +5,16 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gpui::{
-    AnyWindowHandle, App, AppContext as _, Bounds, Context, Entity, FocusHandle, Global,
-    KeyDownEvent, MouseButton, Pixels, Size, Subscription, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowDecorations, WindowOptions, canvas, div, prelude::*, px, size,
+    AnyWindowHandle, App, AppContext as _, Context, Entity, FocusHandle, Global, KeyDownEvent, MouseButton, Pixels,
+    Size, Subscription, Window, canvas, div, prelude::*, px, size,
 };
-use gpui_component::window_border;
-use gpui_kit_assets::IconName;
 use image::RgbaImage;
 
 use crate::board::{self, Board};
 use crate::settings::Settings;
-use crate::ui::{self, Tone};
-use crate::{alert, flow, output, theme};
+use crate::theme::{self, Theme};
+use crate::widgets::{self, ActionTone};
+use crate::{alert, chrome, flow, icons, motion, output, ui};
 
 const TOP_BAR: f32 = 50.;
 const BOTTOM_BAR: f32 = 40.;
@@ -32,27 +30,12 @@ impl Global for EditorWindow {}
 /// Opening an editor closes the previous one.
 pub fn open(image: RgbaImage, source: Option<PathBuf>, cx: &mut App) {
     close(cx);
-    let bounds = Bounds::centered(None, crate::preview::csd_size(1040., 740.), cx);
-    let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
-        titlebar: Some(gpui::TitlebarOptions {
-            title: Some("SlopShot — Editor".into()),
-            appears_transparent: true,
-            ..Default::default()
-        }),
-        window_decorations: Some(WindowDecorations::Client),
-        // The client-side shadow around the frame needs an alpha channel.
-        window_background: WindowBackgroundAppearance::Transparent,
-        app_id: Some(crate::APP_ID.into()),
-        window_min_size: Some(crate::preview::csd_size(760., 500.)),
-        focus: true,
-        ..Default::default()
-    };
+    let options = chrome::window_options("SlopShot — Editor", (1040., 740.), Some((760., 500.)), cx);
     let mut created = None;
     let result = cx.open_window(options, |window, cx| {
         let editor = cx.new(|cx| Editor::new(image, source, window, cx));
         created = Some(editor.clone());
-        cx.new(|cx| gpui_component::Root::new(editor, window, cx))
+        editor
     });
     match result {
         Ok(handle) => {
@@ -322,9 +305,8 @@ impl Editor {
             .items_center()
             .gap(px(8.))
             .px(px(10.))
-            .bg(theme::bg())
             .border_b_1()
-            .border_color(theme::ink(0.06))
+            .border_color(Theme::get().border)
             .child(board::tools_pill(&self.board, cx))
             .child(board::style_pill(&self.board, cx))
             .child(actions)
@@ -336,15 +318,23 @@ impl Editor {
                     .min_w(px(8.))
                     .on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move()),
             )
-            .child(ui::text_button("save-as", Tone::Filled, "Save as…").on_click(cx.listener(|this, _, window, cx| this.save_as(window, cx))))
-            .child(ui::text_button("done", Tone::Solid, "Done").on_click(cx.listener(|this, _, window, cx| this.done(window, cx))))
+            .child(
+                widgets::text_action(Theme::get(), ActionTone::Filled, "Save as…")
+                    .id("save-as")
+                    .on_click(cx.listener(|this, _, window, cx| this.save_as(window, cx))),
+            )
+            .child(
+                widgets::text_action(Theme::get(), ActionTone::Solid, "Done")
+                    .id("done")
+                    .on_click(cx.listener(|this, _, window, cx| this.done(window, cx))),
+            )
     }
 
     fn bottom_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let zoom_button = |id: &'static str, name: IconName, f: fn(&mut Self, &mut Context<Self>)| {
+        let zoom_button = |id: &'static str, name: &'static str, f: fn(&mut Self, &mut Context<Self>)| {
             board::hud_button(id, "", cx.listener(move |this, _, _, cx| f(this, cx)))
                 .size(px(24.))
-                .child(board::icon(name, 12., theme::muted()))
+                .child(board::icon(name, 12., Theme::get().text_muted))
         };
         let zoom = div()
             .flex()
@@ -353,17 +343,17 @@ impl Editor {
             .p(px(2.))
             .rounded(px(8.))
             .bg(theme::ink(0.05))
-            .child(zoom_button("zoom-out", IconName::Minus, Self::zoom_out))
+            .child(zoom_button("zoom-out", icons::MINUS, Self::zoom_out))
             .child(
                 board::hud_button("zoom-fit", "Fit to window (Ctrl+0)", cx.listener(|this, _, _, cx| this.zoom_fit(cx)))
                     .w(px(46.))
                     .h(px(24.))
                     .text_size(px(12.))
-                    .text_color(theme::text())
+                    .text_color(Theme::get().text)
                     .child(format!("{}%", (self.zoom * 100.).round() as i32)),
             )
-            .child(zoom_button("zoom-in", IconName::Plus, Self::zoom_in));
-        let icon_button = |id: &'static str, name: IconName, tip: &'static str, f: fn(&mut Self, &mut Window, &mut Context<Self>)| {
+            .child(zoom_button("zoom-in", icons::PLUS, Self::zoom_in));
+        let icon_button = |id: &'static str, name: &'static str, tip: &'static str, f: fn(&mut Self, &mut Window, &mut Context<Self>)| {
             ui::icon_button(id, name, tip).on_click(cx.listener(move |this, _, window, cx| f(this, window, cx)))
         };
         div()
@@ -373,13 +363,12 @@ impl Editor {
             .items_center()
             .gap(px(6.))
             .px(px(12.))
-            .bg(theme::bg())
             .border_t_1()
-            .border_color(theme::ink(0.06))
-            .child(div().flex_1().text_size(px(12.)).text_color(theme::faint()).child(self.board.read(cx).status_line()))
+            .border_color(Theme::get().border)
+            .child(div().flex_1().text_size(px(12.)).text_color(Theme::get().text_faint).child(self.board.read(cx).status_line()))
             .child(zoom)
-            .child(icon_button("share", IconName::Share, "Share", Self::share))
-            .child(icon_button("copy", IconName::Copy, "Copy", Self::copy))
+            .child(icon_button("share", icons::SHARE, "Share", Self::share))
+            .child(icon_button("copy", icons::COPY, "Copy", Self::copy))
     }
 }
 
@@ -389,7 +378,8 @@ fn close_window(window: &mut Window, cx: &mut App) {
 }
 
 impl Render for Editor {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        motion::window_frame(window);
         let area_size = self.area.get();
         let (avail_w, avail_h) = (f32::from(area_size.width), f32::from(area_size.height));
         let (iw, ih) = {
@@ -414,7 +404,7 @@ impl Render for Editor {
             .id("board-area")
             .size_full()
             .overflow_scroll()
-            .bg(theme::sidebar())
+            .bg(theme::wash(0.05))
             .child(
                 div()
                     .min_w(px(avail_w))
@@ -439,20 +429,17 @@ impl Render for Editor {
                     ),
             );
 
-        window_border().child(
-            div()
-                .id("editor")
-                .track_focus(&self.focus)
-                .on_key_down(cx.listener(Self::key_down))
-                .size_full()
-                .flex()
-                .flex_col()
-                .bg(theme::bg())
-                .text_color(theme::text())
-                .text_size(px(13.))
-                .child(self.top_bar(cx))
-                .child(div().relative().flex_1().min_h_0().child(measure).child(area))
-                .child(self.bottom_bar(cx)),
-        )
+        let content = div()
+            .id("editor")
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(Self::key_down))
+            .size_full()
+            .flex()
+            .flex_col()
+            .text_size(px(13.))
+            .child(self.top_bar(cx))
+            .child(div().relative().flex_1().min_h_0().child(measure).child(area))
+            .child(self.bottom_bar(cx));
+        chrome::frame(window, true, Theme::get().surface, content)
     }
 }

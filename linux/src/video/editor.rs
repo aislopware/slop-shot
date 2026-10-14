@@ -16,17 +16,9 @@ use std::time::Duration;
 use gpui::{
     AnyWindowHandle, App, AppContext as _, Bounds, Context, Entity, FocusHandle, Focusable as _, Global, Hsla, KeyDownEvent,
     MouseButton, MouseDownEvent, MouseMoveEvent, ObjectFit, PathBuilder, Pixels, Point, RenderImage, SharedString,
-    Subscription, Task, Window, WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowOptions, canvas,
-    div, img, point, prelude::*, px,
+    Subscription, Task, Window, canvas, div, img, point, prelude::*, px,
 };
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::checkbox::Checkbox;
-use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::searchable_list::SearchableVec;
-use gpui_component::select::{Select, SelectEvent, SelectState};
-use gpui_component::slider::{Slider, SliderEvent, SliderState};
-use gpui_component::{Disableable as _, IndexPath, Sizable as _, window_border};
-use gpui_kit_assets::IconName;
+use gpui_base::input::{InputEvent, InputState};
 use image::RgbaImage;
 
 use super::export::{self, Audio, Format, FrameRate, Options, Quality, Resolution};
@@ -35,9 +27,12 @@ use super::player::{self, Info, Player};
 use super::render::{self, Plan};
 use crate::annotate::{PALETTE, Rgba};
 use crate::board;
+use crate::icons;
 use crate::preview::{self, white};
 use crate::settings::Settings;
-use crate::{alert, flow, output};
+use crate::theme::Theme;
+use crate::widgets::{self, ActionTone, SelectOption, SelectState, SlideEvent, text_tooltip};
+use crate::{alert, chrome, flow, motion, output, ui};
 
 const TOP_BAR: f32 = 52.;
 const TRANSPORT: f32 = 36.;
@@ -79,14 +74,14 @@ fn tint(kind: Kind) -> Hsla {
     gpui::Rgba { r: r as f32 / 255., g: g as f32 / 255., b: b as f32 / 255., a: 1. }.into()
 }
 
-fn icon(kind: Kind) -> IconName {
+fn icon(kind: Kind) -> &'static str {
     match kind {
-        Kind::Cut => IconName::Scissors,
-        Kind::Speed => IconName::Gauge,
-        Kind::Freeze => IconName::Snowflake,
-        Kind::Zoom => IconName::ZoomIn,
-        Kind::Censor => IconName::EyeOff,
-        Kind::Text => IconName::Type,
+        Kind::Cut => icons::SCISSORS,
+        Kind::Speed => icons::SPEEDOMETER_MIDDLE,
+        Kind::Freeze => icons::SNOWFLAKE,
+        Kind::Zoom => icons::MAGNIFER_ZOOM_IN,
+        Kind::Censor => icons::EYE_CLOSED,
+        Kind::Text => icons::TEXT_FIELD,
     }
 }
 
@@ -119,20 +114,8 @@ impl Global for VideoEditorWindow {}
 /// Opening an editor closes the previous one.
 pub fn open(file: PathBuf, cx: &mut App) {
     close(cx);
-    let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, preview::csd_size(1160., 780.), cx))),
-        titlebar: Some(gpui::TitlebarOptions { title: Some("SlopShot — Video Editor".into()), appears_transparent: true, ..Default::default() }),
-        window_decorations: Some(WindowDecorations::Client),
-        window_background: WindowBackgroundAppearance::Transparent,
-        app_id: Some(crate::APP_ID.into()),
-        window_min_size: Some(preview::csd_size(940., 640.)),
-        focus: true,
-        ..Default::default()
-    };
-    let result = cx.open_window(options, |window, cx| {
-        let editor = cx.new(|cx| VideoEditor::new(file, window, cx));
-        cx.new(|cx| gpui_component::Root::new(editor, window, cx))
-    });
+    let options = chrome::window_options("SlopShot — Video Editor", (1160., 780.), Some((940., 640.)), cx);
+    let result = cx.open_window(options, |window, cx| cx.new(|cx| VideoEditor::new(file, window, cx)));
     match result {
         Ok(handle) => cx.set_global(VideoEditorWindow { handle: handle.into() }),
         Err(err) => alert::error("Couldn't open the video editor", &format!("{err:#}"), cx),
@@ -186,13 +169,9 @@ fn knobs(kind: Kind) -> Vec<Knob> {
     }
 }
 
-type Choice = SelectState<SearchableVec<SharedString>>;
-
-/// The inspector's widgets for the selected segment; rebuilt when it changes.
+/// The caption field for the selected text segment; rebuilt when the selection changes.
 struct Inspector {
     id: u64,
-    sliders: Vec<(Knob, Entity<SliderState>)>,
-    speed: Option<Entity<Choice>>,
     caption: Option<Entity<InputState>>,
     _subs: Vec<Subscription>,
 }
@@ -231,11 +210,10 @@ struct VideoEditor {
     stage: Rc<Cell<Bounds<Pixels>>>,
     timeline: Rc<Cell<Bounds<Pixels>>>,
     inspector: Option<Inspector>,
-    audio_sliders: Vec<Entity<SliderState>>,
-    selects: Vec<Entity<Choice>>,
+    speed_select: SelectState,
+    /// Format, quality, resolution and frame rate.
+    selects: [SelectState; 4],
     focus: FocusHandle,
-    _select_subs: Vec<Subscription>,
-    _audio_subs: Vec<Subscription>,
     _rebuild: Option<Task<()>>,
     _loop: Task<()>,
 }
@@ -271,7 +249,7 @@ impl VideoEditor {
             });
         })
         .detach();
-        let mut this = Self {
+        Self {
             file,
             info: None,
             load_error: None,
@@ -296,16 +274,12 @@ impl VideoEditor {
             stage: Rc::default(),
             timeline: Rc::default(),
             inspector: None,
-            audio_sliders: vec![],
-            selects: vec![],
+            speed_select: SelectState::default(),
+            selects: Default::default(),
             focus,
-            _select_subs: vec![],
-            _audio_subs: vec![],
             _rebuild: None,
             _loop: ticker,
-        };
-        this.build_selects(window, cx);
-        this
+        }
     }
 
     fn loaded(&mut self, info: Info, size: (u32, u32), mut player: Player, window: &mut Window, cx: &mut Context<Self>) {
@@ -315,24 +289,6 @@ impl VideoEditor {
         player.set_map(self.edit.time_map());
         self.player = Some(player);
         self.plan = Arc::new(Plan::new(&[], size.0, size.1));
-        self.audio_sliders = (0..info.audio_tracks)
-            .map(|_| cx.new(|_| SliderState::new().min(0.).max(1.).step(0.01).default_value(1.)))
-            .collect();
-        self._audio_subs = self
-            .audio_sliders
-            .iter()
-            .enumerate()
-            .map(|(i, state)| {
-                cx.subscribe(state, move |this: &mut Self, _, event: &SliderEvent, cx| {
-                    let SliderEvent::Change(v) = event else { return };
-                    if let Some(volume) = this.audio.volumes.get_mut(i) {
-                        *volume = v.start() as f64;
-                    }
-                    this.apply_audio();
-                    cx.notify();
-                })
-            })
-            .collect();
         let (file, duration) = (self.file.clone(), info.duration);
         self.info = Some(info);
         cx.spawn_in(window, async move |this, cx| {
@@ -813,46 +769,6 @@ impl VideoEditor {
 
     // ── widgets ───────────────────────────────────────────────────────────
 
-    fn choice<T: Copy + PartialEq + 'static>(
-        all: &[T],
-        label: fn(T) -> &'static str,
-        current: T,
-        apply: fn(&mut Self, T, &mut Window, &mut Context<Self>),
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> (Entity<Choice>, Subscription) {
-        let all = all.to_vec();
-        let items: Vec<SharedString> = all.iter().map(|v| label(*v).into()).collect();
-        let selected = all.iter().position(|v| *v == current).map(IndexPath::new);
-        let state = cx.new(|cx| SelectState::new(SearchableVec::new(items), selected, window, cx));
-        let sub = cx.subscribe_in(&state, window, move |this, _, event: &SelectEvent<SearchableVec<SharedString>>, window, cx| {
-            let SelectEvent::Confirm(Some(value)) = event else { return };
-            if let Some(v) = all.iter().find(|v| label(**v) == value.as_ref()) {
-                apply(this, *v, window, cx);
-                cx.notify();
-            }
-        });
-        (state, sub)
-    }
-
-    fn build_selects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let o = self.options;
-        let (format, s1) = Self::choice(&Format::ALL, Format::label, o.format, |this, v, window, cx| {
-            this.options.format = v;
-            // GIF only takes low rates.
-            let allowed = FrameRate::choices(v);
-            if !allowed.contains(&this.options.frame_rate) {
-                this.options.frame_rate = allowed[0];
-            }
-            this.build_selects(window, cx);
-        }, window, cx);
-        let (quality, s2) = Self::choice(&Quality::ALL, Quality::label, o.quality, |this, v, _, _| this.options.quality = v, window, cx);
-        let (resolution, s3) = Self::choice(&Resolution::ALL, Resolution::label, o.resolution, |this, v, _, _| this.options.resolution = v, window, cx);
-        let (rate, s4) = Self::choice(FrameRate::choices(o.format), FrameRate::label, o.frame_rate, |this, v, _, _| this.options.frame_rate = v, window, cx);
-        self.selects = vec![format, quality, resolution, rate];
-        self._select_subs = vec![s1, s2, s3, s4];
-    }
-
     fn sync_inspector(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(seg) = self.selected.and_then(|id| self.edit.get(id)).cloned() else {
             self.inspector = None;
@@ -863,49 +779,6 @@ impl VideoEditor {
         }
         let id = seg.id;
         let mut subs = vec![];
-        let sliders = knobs(seg.kind)
-            .into_iter()
-            .map(|knob| {
-                let state = cx.new(|_| {
-                    SliderState::new()
-                        .min(knob.range.0 as f32)
-                        .max(knob.range.1 as f32)
-                        .step(((knob.range.1 - knob.range.0) / 200.) as f32)
-                        .default_value((knob.get)(&seg).clamp(knob.range.0, knob.range.1) as f32)
-                });
-                subs.push(cx.subscribe(&state, move |this: &mut Self, _, event: &SliderEvent, cx| match event {
-                    SliderEvent::Change(v) => {
-                        // One undo step per drag, taken as it starts.
-                        if !this.knob_live {
-                            this.knob_live = true;
-                            this.push_undo();
-                        }
-                        if let Some(s) = this.edit.get_mut(id) {
-                            (knob.set)(s, v.start() as f64);
-                        }
-                        this.touch(cx);
-                    }
-                    SliderEvent::Release(_) => this.knob_live = false,
-                }));
-                (knob, state)
-            })
-            .collect();
-        let speed = (seg.kind == Kind::Speed).then(|| {
-            let items: Vec<SharedString> = SPEEDS.iter().map(|f| speed_label(*f).into()).collect();
-            let selected = SPEEDS.iter().position(|f| (f - seg.speed).abs() < 0.001).map(IndexPath::new);
-            let state = cx.new(|cx| SelectState::new(SearchableVec::new(items), selected, window, cx));
-            subs.push(cx.subscribe(&state, move |this: &mut Self, _, event: &SelectEvent<SearchableVec<SharedString>>, cx| {
-                let SelectEvent::Confirm(Some(value)) = event else { return };
-                if let Some(f) = SPEEDS.iter().find(|f| speed_label(**f) == value.as_ref()) {
-                    this.push_undo();
-                    if let Some(s) = this.edit.get_mut(id) {
-                        s.speed = *f;
-                    }
-                    this.touch(cx);
-                }
-            }));
-            state
-        });
         let caption = (seg.kind == Kind::Text).then(|| {
             let state = cx.new(|cx| InputState::new(window, cx).placeholder("Caption").default_value(seg.text.clone()));
             subs.push(cx.subscribe(&state, move |this: &mut Self, input, event: &InputEvent, cx| {
@@ -919,7 +792,7 @@ impl VideoEditor {
             }));
             state
         });
-        self.inspector = Some(Inspector { id, sliders, speed, caption, _subs: subs });
+        self.inspector = Some(Inspector { id, caption, _subs: subs });
     }
 
     // ── layout ────────────────────────────────────────────────────────────
@@ -954,14 +827,14 @@ impl VideoEditor {
             .rounded(px(7.))
             .bg(white(0.06))
             .opacity(0.4)
-            .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("No clicks were recorded for this take").build(window, cx))
-            .child(board::icon(IconName::WandSparkles, 12., gray(0.85)))
+            .tooltip(text_tooltip("No clicks were recorded for this take"))
+            .child(board::icon(icons::MAGIC_STICK_3, 12., gray(0.85)))
             .child(div().text_size(px(11.)).font_weight(gpui::FontWeight::MEDIUM).text_color(gray(0.85)).child("Auto Zoom"));
         let undo = board::hud_button("undo", "Undo (Ctrl+Z)", cx.listener(|this, _, _, cx| this.undo(cx)))
             .size(px(30.))
             .bg(white(0.06))
             .when(self.undo.is_empty(), |d| d.opacity(0.4))
-            .child(board::icon(IconName::Undo2, 13., gray(0.85)));
+            .child(board::icon(icons::UNDO_LEFT, 13., gray(0.85)));
         div()
             .h(px(TOP_BAR))
             .flex_none()
@@ -976,11 +849,13 @@ impl VideoEditor {
             .child(auto_zoom)
             .child(undo)
             .child(div().flex_1().h_full().min_w(px(8.)).on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move()))
-            .child(Button::new("export-as").label("Export As…").large().disabled(busy).on_click(cx.listener(|this, _, _, cx| this.export(true, cx))))
-            .child(Button::new("export").label("Export").primary().large().disabled(busy).on_click(cx.listener(|this, _, _, cx| this.export(false, cx))))
-            .child(Button::new("done").label("Done").large().disabled(busy).on_click(|_, window, cx| {
-                cx.remove_global::<VideoEditorWindow>();
-                window.remove_window();
+            .child(action("export-as", ActionTone::Filled, "Export As…", busy).when(!busy, |el| el.on_click(cx.listener(|this, _, _, cx| this.export(true, cx)))))
+            .child(action("export", ActionTone::Solid, "Export", busy).when(!busy, |el| el.on_click(cx.listener(|this, _, _, cx| this.export(false, cx)))))
+            .child(action("done", ActionTone::Filled, "Done", busy).when(!busy, |el| {
+                el.on_click(|_, window, cx| {
+                    cx.remove_global::<VideoEditorWindow>();
+                    window.remove_window();
+                })
             }))
     }
 
@@ -1072,7 +947,7 @@ impl VideoEditor {
 
     fn transport(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let (comp, total, playing) = self.player.as_ref().map_or((0., 0., false), |p| (p.comp, p.map().duration(), p.is_playing()));
-        let button = |id: &'static str, icon: IconName, tip: &'static str, f: fn(&mut Self, &mut Context<Self>)| {
+        let button = |id: &'static str, icon: &'static str, tip: &'static str, f: fn(&mut Self, &mut Context<Self>)| {
             board::hud_button(id, tip, cx.listener(move |this, _, _, cx| f(this, cx))).size(px(26.)).child(board::icon(icon, 12., gray(0.85)))
         };
         div()
@@ -1085,8 +960,8 @@ impl VideoEditor {
             .bg(raised())
             .border_t_1()
             .border_color(white(0.08))
-            .child(button("play", if playing { IconName::Pause } else { IconName::Play }, "Play / Pause (Space)", Self::toggle_play))
-            .child(button("to-start", IconName::SkipBack, "Back to the start of the trim", Self::go_to_start))
+            .child(button("play", if playing { icons::PAUSE } else { icons::PLAY }, "Play / Pause (Space)", Self::toggle_play))
+            .child(button("to-start", icons::SKIP_PREVIOUS, "Back to the start of the trim", Self::go_to_start))
             .child(div().text_size(px(11.)).text_color(gray(0.75)).child(format!("{} / {}", timecode(comp, false), timecode(total, false))))
             .child(div().flex_1())
             .child(div().text_size(px(11.)).text_color(gray(0.5)).child("A tool drops in at the playhead — drag it on its lane to place it"))
@@ -1100,7 +975,7 @@ impl VideoEditor {
         div().text_size(px(11.)).text_color(gray(0.68)).child(s.into())
     }
 
-    fn slider_row(label: &str, value: String, state: &Entity<SliderState>) -> impl IntoElement {
+    fn slider_row(label: &str, value: String, slider: gpui::Stateful<gpui::Div>) -> impl IntoElement {
         div()
             .flex()
             .flex_col()
@@ -1112,19 +987,32 @@ impl VideoEditor {
                     .child(div().text_size(px(11.)).text_color(gray(0.75)).child(label.to_owned()))
                     .child(div().text_size(px(10.)).text_color(gray(0.55)).child(value)),
             )
-            .child(Slider::new(state))
+            .child(slider.w_full())
     }
 
-    fn inspector(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn inspector(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut body = div().id("inspector").size_full().overflow_y_scroll().p(px(14.)).flex().flex_col().gap(px(14.));
         match (self.selected.and_then(|id| self.edit.get(id)), &self.inspector) {
-            (Some(seg), Some(widgets)) => {
+            (Some(seg), Some(inspector)) => {
                 let id = seg.id;
                 body = body
                     .child(div().flex().items_center().gap(px(6.)).child(board::icon(icon(seg.kind), 11., tint(seg.kind))).child(Self::section_title(seg.kind.label())))
                     .child(Self::caption(format!("{} → {}  ({:.2}s)", timecode(seg.start, true), timecode(seg.end, true), seg.duration())));
-                if let Some(speed) = &widgets.speed {
-                    body = body.child(Select::new(speed).small()).child(Self::caption(format!(
+                if seg.kind == Kind::Speed {
+                    let speed = widgets::select("speed", Theme::get(), |this: &mut Self| &mut this.speed_select)
+                        .options(
+                            SPEEDS.iter().map(|f| SelectOption::new(speed_label(*f))),
+                            SPEEDS.iter().position(|f| (f - seg.speed).abs() < 0.001).unwrap_or(0),
+                        )
+                        .on_select(move |this, ix, _, cx| {
+                            this.push_undo();
+                            if let Some(s) = this.edit.get_mut(id) {
+                                s.speed = SPEEDS[ix];
+                            }
+                            this.touch(cx);
+                        })
+                        .render(&self.speed_select, window, cx);
+                    body = body.child(speed).child(Self::caption(format!(
                         "{:.2}s of the clip plays in {:.2}s.",
                         seg.duration(),
                         seg.duration() / seg.speed.max(0.01)
@@ -1151,21 +1039,43 @@ impl VideoEditor {
                     }
                     body = body.child(toggle);
                 }
-                if let Some(caption) = &widgets.caption {
-                    body = body.child(Input::new(caption).small());
+                if let Some(caption) = &inspector.caption {
+                    body = body.child(ui::text_field(caption));
                 }
-                for (knob, state) in &widgets.sliders {
-                    body = body.child(Self::slider_row(knob.label, (knob.show)((knob.get)(seg)), state));
+                for knob in knobs(seg.kind) {
+                    let (lo, hi) = knob.range;
+                    let value = (knob.get)(seg).clamp(lo, hi);
+                    let slider = widgets::slider(
+                        SharedString::from(format!("knob-{}", knob.label)),
+                        Theme::get(),
+                        ((value - lo) / (hi - lo)) as f32,
+                        cx,
+                        move |this, event, _, cx| match event {
+                            SlideEvent::Change(f) => {
+                                // One undo step per drag, taken as it starts.
+                                if !this.knob_live {
+                                    this.knob_live = true;
+                                    this.push_undo();
+                                }
+                                if let Some(s) = this.edit.get_mut(id) {
+                                    (knob.set)(s, lo + f as f64 * (hi - lo));
+                                }
+                                this.touch(cx);
+                            }
+                            SlideEvent::Release => this.knob_live = false,
+                        },
+                    );
+                    body = body.child(Self::slider_row(knob.label, (knob.show)(value), slider));
                 }
                 if seg.kind == Kind::Text {
                     let mut swatches = div().flex().flex_wrap().gap(px(5.));
                     for (name, color) in PALETTE {
                         swatches = swatches.child(swatch(id, name, color, seg.text_color == color, cx));
                     }
-                    body = body.child(swatches).child(Checkbox::new("shadow").label("Shadow").checked(seg.shadow).on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                    body = body.child(swatches).child(ui::checkbox("shadow", seg.shadow, "Shadow").on_click(cx.listener(move |this, _, _, cx| {
                         this.push_undo();
                         if let Some(s) = this.edit.get_mut(id) {
-                            s.shadow = *checked;
+                            s.shadow = !s.shadow;
                         }
                         this.touch(cx);
                     })));
@@ -1178,11 +1088,12 @@ impl VideoEditor {
                     _ => "",
                 }));
                 body = body.child(
-                    Button::new("delete")
-                        .icon(IconName::Trash)
-                        .label("Delete")
-                        .danger()
-                        .small()
+                    widgets::action_button(Theme::get(), ActionTone::Quiet)
+                        .id("delete")
+                        .self_start()
+                        .text_color(Theme::get().danger)
+                        .child(board::icon(icons::TRASH_BIN_MINIMALISTIC, 14., Theme::get().danger))
+                        .child("Delete")
                         .on_click(cx.listener(move |this, _, _, cx| this.delete(id, cx))),
                 );
             }
@@ -1193,8 +1104,8 @@ impl VideoEditor {
                     .child(Self::caption("Select a clip on the timeline to edit it, or pick a tool above and drag on its lane."));
             }
         }
-        if !self.audio_sliders.is_empty() {
-            let n = self.audio_sliders.len();
+        if !self.audio.volumes.is_empty() {
+            let n = self.audio.volumes.len();
             let mut audio = div()
                 .flex()
                 .flex_col()
@@ -1203,16 +1114,23 @@ impl VideoEditor {
                 .border_t_1()
                 .border_color(white(0.08))
                 .child(Self::section_title("Audio"))
-                .child(Checkbox::new("mute").label("Mute all").checked(self.audio.muted).on_click(cx.listener(|this, checked: &bool, _, cx| {
-                    this.audio.muted = *checked;
+                .child(ui::checkbox("mute", self.audio.muted, "Mute all").on_click(cx.listener(|this, _, _, cx| {
+                    this.audio.muted = !this.audio.muted;
                     this.apply_audio();
                     cx.notify();
                 })));
             if !self.audio.muted {
-                for (i, state) in self.audio_sliders.iter().enumerate() {
+                for (i, v) in self.audio.volumes.clone().into_iter().enumerate() {
                     let label = if n == 1 { "Volume" } else if i == 0 { "System" } else { "Microphone" };
-                    let v = self.audio.volumes.get(i).copied().unwrap_or(1.);
-                    audio = audio.child(Self::slider_row(label, format!("{}%", (v * 100.).round()), state));
+                    let slider = widgets::slider(("volume", i), Theme::get(), v as f32, cx, move |this, event, _, cx| {
+                        let SlideEvent::Change(f) = event else { return };
+                        if let Some(volume) = this.audio.volumes.get_mut(i) {
+                            *volume = f as f64;
+                        }
+                        this.apply_audio();
+                        cx.notify();
+                    });
+                    audio = audio.child(Self::slider_row(label, format!("{}%", (v * 100.).round()), slider));
                 }
             }
             body = body.child(audio);
@@ -1343,23 +1261,75 @@ impl VideoEditor {
         )
     }
 
-    fn bottom_bar(&self) -> impl IntoElement {
-        let labeled = |title: &'static str, select: &Entity<Choice>| {
-            div().flex().flex_col().gap(px(2.)).child(div().text_size(px(9.)).text_color(gray(0.5)).child(title)).child(Select::new(select).small().w(px(104.)))
+    fn bottom_bar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let labeled = |title: &'static str, select: gpui::Stateful<gpui::Div>| {
+            div().flex().flex_col().gap(px(2.)).child(div().text_size(px(9.)).text_color(gray(0.5)).child(title)).child(select)
         };
+        let o = self.options;
+        let busy = self.exporting.is_some();
         let n = self.edit.segments.len();
         let len = timecode(self.player.as_ref().map_or(0., |p| p.map().duration()), true);
         let summary = if n == 0 { format!("{len} · no edits") } else { format!("{len} · {n} edit{}", if n == 1 { "" } else { "s" }) };
         let mut bar = div().h(px(BOTTOM_BAR)).flex_none().flex().items_center().gap(px(16.)).px(px(16.)).bg(raised()).border_t_1().border_color(white(0.08));
-        if self.selects.len() == 4 {
-            bar = bar.child(labeled("Format", &self.selects[0]));
-            if self.options.format != Format::Gif {
-                bar = bar.child(labeled("Quality", &self.selects[1]));
-            }
-            bar = bar.child(labeled("Resolution", &self.selects[2])).child(labeled("Frame rate", &self.selects[3]));
+        bar = bar.child(labeled(
+            "Format",
+            choice(0, &Format::ALL, Format::label, o.format, busy, &self.selects[0], window, cx, |this, v| {
+                this.options.format = v;
+                // GIF only takes low rates.
+                let allowed = FrameRate::choices(v);
+                if !allowed.contains(&this.options.frame_rate) {
+                    this.options.frame_rate = allowed[0];
+                }
+            }),
+        ));
+        if o.format != Format::Gif {
+            bar = bar.child(labeled(
+                "Quality",
+                choice(1, &Quality::ALL, Quality::label, o.quality, busy, &self.selects[1], window, cx, |this, v| this.options.quality = v),
+            ));
         }
+        bar = bar
+            .child(labeled(
+                "Resolution",
+                choice(2, &Resolution::ALL, Resolution::label, o.resolution, busy, &self.selects[2], window, cx, |this, v| this.options.resolution = v),
+            ))
+            .child(labeled(
+                "Frame rate",
+                choice(3, FrameRate::choices(o.format), FrameRate::label, o.frame_rate, busy, &self.selects[3], window, cx, |this, v| {
+                    this.options.frame_rate = v
+                }),
+            ));
         bar.when(self.exporting.is_some(), |d| d.opacity(0.5)).child(div().flex_1()).child(div().text_size(px(11.)).text_color(gray(0.55)).child(summary))
     }
+}
+
+/// An export option's select; `ix` picks its state in `VideoEditor::selects`.
+#[allow(clippy::too_many_arguments)]
+fn choice<T: Copy + PartialEq + 'static>(
+    ix: usize,
+    all: &'static [T],
+    label: fn(T) -> &'static str,
+    current: T,
+    disabled: bool,
+    state: &SelectState,
+    window: &Window,
+    cx: &mut Context<VideoEditor>,
+    apply: fn(&mut VideoEditor, T),
+) -> gpui::Stateful<gpui::Div> {
+    widgets::select(SharedString::from(format!("export-option-{ix}")), Theme::get(), move |this: &mut VideoEditor| &mut this.selects[ix])
+        .options(all.iter().map(|v| SelectOption::new(label(*v))), all.iter().position(|v| *v == current).unwrap_or(0))
+        .width(104.)
+        .on_select(move |this, i, _, cx| {
+            apply(this, all[i]);
+            cx.notify();
+        })
+        .render(state, window, cx)
+        .when(disabled, |el| el.opacity(0.5).child(div().absolute().inset_0().occlude()))
+}
+
+/// A top-bar action, inert while `busy`.
+fn action(id: &'static str, tone: ActionTone, label: &'static str, busy: bool) -> gpui::Stateful<gpui::Div> {
+    widgets::text_action(Theme::get(), tone, label).id(id).when(busy, |el| el.opacity(0.5).cursor_default())
 }
 
 fn swatch(id: u64, name: &'static str, color: Rgba, on: bool, cx: &mut Context<VideoEditor>) -> impl IntoElement {
@@ -1371,7 +1341,7 @@ fn swatch(id: u64, name: &'static str, color: Rgba, on: bool, cx: &mut Context<V
         .border_2()
         .border_color(if on { gpui::white() } else { white(0.15) })
         .cursor_pointer()
-        .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(name).build(window, cx))
+        .tooltip(text_tooltip(name))
         .on_click(cx.listener(move |this, _, _, cx| {
             this.push_undo();
             if let Some(s) = this.edit.get_mut(id) {
@@ -1383,9 +1353,9 @@ fn swatch(id: u64, name: &'static str, color: Rgba, on: bool, cx: &mut Context<V
 
 impl Render for VideoEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        motion::window_frame(window);
         self.sync_inspector(window, cx);
-        window_border().child(
-            div()
+        let content = div()
                 .id("video-editor")
                 .track_focus(&self.focus)
                 .on_key_down(cx.listener(Self::key_down))
@@ -1396,7 +1366,6 @@ impl Render for VideoEditor {
                 .size_full()
                 .flex()
                 .flex_col()
-                .bg(surface())
                 .text_color(gpui::white())
                 .child(self.top_bar(cx))
                 .child(
@@ -1405,11 +1374,11 @@ impl Render for VideoEditor {
                         .min_h_0()
                         .flex()
                         .child(div().flex_1().min_w_0().flex().flex_col().child(self.stage(cx)).child(self.transport(cx)))
-                        .child(self.inspector(cx)),
+                        .child(self.inspector(window, cx)),
                 )
                 .child(self.timeline(cx))
-                .child(self.bottom_bar()),
-        )
+                .child(self.bottom_bar(window, cx));
+        chrome::frame(window, true, surface(), content)
     }
 }
 

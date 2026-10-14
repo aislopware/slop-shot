@@ -215,10 +215,11 @@ def alerts_opened():
 
 
 def default_button(shot):
-    """Centre of the light default button of an alert (the theme's #e8e8ea), or None.
-    Near-black on both sides is what sets it apart from a white notification banner."""
+    """Centre of the light default button of an alert (the theme's #ebebeb, a little
+    dimmer under the pointer), or None. Near-black on both sides is what sets it apart
+    from a white notification banner."""
     rgb = shot[:, :, :3].astype(int)
-    white = (rgb >= 224).all(axis=2)
+    white = (rgb >= 200).all(axis=2)
     dark = (rgb <= 40).all(axis=2)
     rows = []
     for y in range(rgb.shape[0]):
@@ -585,11 +586,11 @@ def run(app, inp):
     shot = portal_screenshot("16-editor")
     # Like macOS, the editor scales the image to fit its canvas (upscaling small ones);
     # the image is the colourful block inside the gray canvas.
-    rgb = shot[140:690, 170:1110, :3].astype(int)
+    rgb = shot[95:738, 125:1155, :3].astype(int)
     colourful = (rgb.max(axis=2) - rgb.min(axis=2)) > 40
     ys, xs = np.nonzero(colourful)
     if check(len(xs) > 1000, "the editor shows the capture"):
-        x0, x1, y0, y1 = xs.min() + 170, xs.max() + 170, ys.min() + 140, ys.max() + 140
+        x0, x1, y0, y1 = xs.min() + 125, xs.max() + 125, ys.min() + 95, ys.max() + 95
         ratio = (x1 - x0 + 1) / (y1 - y0 + 1)
         check(abs(ratio - 4 / 3) < 0.02, f"fitted with its aspect ratio ({x1 - x0 + 1}x{y1 - y0 + 1})")
         cx_, cy_ = (x0 + x1) // 2, (y0 + y1) // 2
@@ -610,7 +611,7 @@ def run(app, inp):
     slopshot("about")
     time.sleep(1)
     portal_screenshot("20-settings-about")
-    inp.click(918, 192)  # close, or it covers what the feature tests capture
+    inp.click(1069, 100)  # close, or it covers what the feature tests capture
     time.sleep(0.5)
 
     # Like macOS, SlopShot never posts a notification.

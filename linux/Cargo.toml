@@ -9,11 +9,11 @@ repository = "https://github.com/aislopware/slop-shot"
 authors = ["thanglb <thang.le@jmango360.com>"]
 
 [dependencies]
-# gpui-component pins the gpui-pre snapshot of Zed; gpui itself must match it exactly.
+# gpui-base pins the gpui-pre snapshot of Zed; gpui itself must match it exactly.
 gpui = { package = "gpui-pre", version = "=0.3.9" }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", features = ["wayland", "x11"] }
-gpui-component = { git = "https://github.com/aislopware/gpui-kit.git" }
-gpui-kit-assets = { git = "https://github.com/aislopware/gpui-kit.git" }
+# Unstyled inputs and scrollbars; every visible component is drawn in src/widgets.rs and friends.
+gpui-base = { git = "https://github.com/aislopware/gpui-kit.git" }
 ashpd = { version = "0.13", default-features = false, features = ["async-io", "screenshot", "open_uri", "screencast", "remote_desktop"] }
 ksni = { version = "0.3", default-features = false, features = ["async-io", "blocking"] }
 serde = { version = "1", features = ["derive"] }
@@ -76,6 +76,7 @@ assets = [
     ["data/icons/hicolor/512x512/apps/com.thanglb.slopshot.png", "usr/share/icons/hicolor/512x512/apps/", "644"],
     # Geist is compiled into the binary (src/theme.rs); the OFL travels with it.
     ["data/fonts/OFL.txt", "usr/share/doc/slopshot/Geist-OFL.txt", "644"],
+    ["THIRD_PARTY_NOTICES.md", "usr/share/doc/slopshot/", "644"],
 ]
 
 [patch.crates-io]

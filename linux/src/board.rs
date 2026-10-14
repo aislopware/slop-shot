@@ -13,10 +13,7 @@ use gpui::{
     Point, RenderImage, SharedString, Stateful, Subscription, Window, canvas, deferred, div, point,
     prelude::*, px,
 };
-use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::tooltip::Tooltip;
-use gpui_component::Icon;
-use gpui_kit_assets::IconName;
+use gpui_base::input::{Input, InputEvent, InputState};
 use image::RgbaImage;
 
 use crate::annotate::{self, Annotation, Layer, Metrics, PALETTE, Pt, Rgba, Tool, WIDTHS};
@@ -25,7 +22,9 @@ use crate::preview::{self, Texture, View, accent, to_render_image, white};
 use crate::raster::{self, BlurCache};
 use crate::settings::Settings;
 use crate::stickers::StickerPicker;
-use crate::{gifwriter, output, sensitive};
+use crate::theme::Theme;
+use crate::widgets::text_tooltip;
+use crate::{gifwriter, icons, output, sensitive};
 
 /// Below this many points a press is a click, not a drag.
 const DRAG_SLOP: f32 = 4.;
@@ -1022,15 +1021,17 @@ impl Render for Board {
             let at = point(px(a.start().0 * view.scale), px(a.start().1 * view.scale));
             let size = annotate::text_size(&self.metrics()) * view.scale;
             Some(
-                div().absolute().left(at.x).top(at.y).w(px(240.)).child(
-                    Input::new(&edit.input)
-                        .appearance(false)
-                        .p_0()
-                        .h(px(size * raster::LINE_HEIGHT))
-                        .text_size(px(size))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(preview::hsla(a.color)),
-                ),
+                div()
+                    .absolute()
+                    .left(at.x)
+                    .top(at.y)
+                    .w(px(240.))
+                    .h(px(size * raster::LINE_HEIGHT))
+                    .text_size(px(size))
+                    .line_height(px(size * raster::LINE_HEIGHT))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(preview::hsla(a.color))
+                    .child(Input::new(&edit.input)),
             )
         });
 
@@ -1109,30 +1110,30 @@ pub fn tinted_button(
         .items_center()
         .justify_center()
         .rounded(px(7.))
-        .text_color(crate::theme::muted())
+        .text_color(Theme::get().text_muted)
         .cursor_pointer()
-        .hover(move |s| s.bg(hover).text_color(crate::theme::text()))
-        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+        .hover(move |s| s.bg(hover).text_color(Theme::get().text))
+        .when(!tip.is_empty(), |el| el.tooltip(text_tooltip(tip)))
         .on_click(on_click)
 }
 
-pub fn icon(name: IconName, size: f32, color: gpui::Hsla) -> Icon {
-    Icon::new(name).size(px(size)).text_color(color)
+pub fn icon(path: &'static str, size: f32, color: gpui::Hsla) -> gpui::Svg {
+    icons::icon(path).size(px(size)).text_color(color)
 }
 
 fn tool_icon(tool: Tool, color: gpui::Hsla) -> AnyElement {
     let name = match tool {
-        Tool::Select => IconName::MousePointer2,
-        Tool::Rect => IconName::RectangleHorizontal,
-        Tool::Ellipse => IconName::Circle,
-        Tool::Line => IconName::Slash,
-        Tool::Arrow => IconName::ArrowUpRight,
-        Tool::Highlight => IconName::Highlighter,
-        Tool::Blur => IconName::Droplet,
-        Tool::Pen => IconName::PenTool,
-        Tool::Text => IconName::Type,
-        Tool::Censor => IconName::Square,
-        // SF Symbols' "1.circle"; lucide has no numbered circle.
+        Tool::Select => icons::CURSOR,
+        Tool::Rect => icons::RECTANGLE,
+        Tool::Ellipse => icons::CIRCLE,
+        Tool::Line => icons::LINE,
+        Tool::Arrow => icons::ARROW_UP_RIGHT,
+        Tool::Highlight => icons::PEN_2,
+        Tool::Blur => icons::RADIAL_BLUR,
+        Tool::Pen => icons::PEN,
+        Tool::Text => icons::TEXT_FIELD,
+        Tool::Censor => icons::SQUARE,
+        // SF Symbols' "1.circle"; Solar has no numbered circle.
         Tool::Counter | Tool::Image => {
             return div()
                 .size(px(15.))
@@ -1172,7 +1173,7 @@ pub fn tools_pill(board: &Entity<Board>, cx: &App) -> Div {
                 .w(px(30.))
                 .h(px(28.))
                 .when(selected, |d| d.bg(white(0.12)))
-                .child(tool_icon(tool, if selected { crate::theme::text() } else { crate::theme::muted() })),
+                .child(tool_icon(tool, if selected { Theme::get().text } else { Theme::get().text_muted })),
             );
         }
     }
@@ -1249,7 +1250,7 @@ pub fn style_pill(board: &Entity<Board>, cx: &App) -> Div {
             board.update(cx, |b, cx| b.toggle_popover(Pop::Width, cx))
         })
         .size(px(30.))
-        .child(icon(IconName::Baseline, 14., crate::theme::muted()))
+        .child(icon(icons::TEXT_UNDERLINE, 14., Theme::get().text_muted))
     };
     let width_panel = {
         let board = board.clone();
@@ -1276,7 +1277,7 @@ pub fn style_pill(board: &Entity<Board>, cx: &App) -> Div {
                         .bg(if chosen { accent() } else { gpui::hsla(0., 0., 0.8, 1.) }),
                 )
                 .child(div().flex_1().text_size(px(13.)).child(name))
-                .when(chosen, |d| d.child(icon(IconName::Check, 11., gpui::white())))
+                .when(chosen, |d| d.child(icon(icons::CHECK, 11., gpui::white())))
             });
             popover_panel(&board).p(px(8.)).flex().flex_col().gap(px(2.)).children(rows).into_any_element()
         }
@@ -1286,7 +1287,7 @@ pub fn style_pill(board: &Entity<Board>, cx: &App) -> Div {
         let board = board.clone();
         hud_button("stickers", "Stickers", move |_, _, cx| board.update(cx, |b, cx| b.toggle_popover(Pop::Sticker, cx)))
             .size(px(30.))
-            .child(icon(IconName::Sticker, 15., crate::theme::muted()))
+            .child(icon(icons::STICKER_SMILE_SQUARE, 15., Theme::get().text_muted))
     };
     let sticker_panel = {
         let (board, picker) = (board.clone(), b.stickers.clone());
@@ -1316,9 +1317,9 @@ pub fn redact_button(board: &Entity<Board>, cx: &App) -> Stateful<Div> {
         .w(px(32.))
         .h(px(30.))
         .child(icon(
-            if scanning { IconName::Hourglass } else { IconName::EyeOff },
+            if scanning { icons::HOURGLASS } else { icons::EYE_CLOSED },
             14.,
-            if hint > 0 { orange } else { crate::theme::muted() },
+            if hint > 0 { orange } else { Theme::get().text_muted },
         ))
         .when(hint > 0, |d| {
             d.child(
@@ -1349,7 +1350,7 @@ pub fn undo_button(board: &Entity<Board>, cx: &App) -> Stateful<Div> {
         .w(px(32.))
         .h(px(30.))
         .when(empty, |d| d.opacity(0.4))
-        .child(icon(IconName::Undo2, 14., crate::theme::muted()))
+        .child(icon(icons::UNDO_LEFT, 14., Theme::get().text_muted))
 }
 
 pub fn clear_button(board: &Entity<Board>, cx: &App) -> Stateful<Div> {
@@ -1359,7 +1360,7 @@ pub fn clear_button(board: &Entity<Board>, cx: &App) -> Stateful<Div> {
         .w(px(32.))
         .h(px(30.))
         .when(empty, |d| d.opacity(0.4))
-        .child(icon(IconName::Trash, 14., crate::theme::muted()))
+        .child(icon(icons::TRASH_BIN_MINIMALISTIC, 14., Theme::get().text_muted))
 }
 
 pub fn transform_menu(board: &Entity<Board>, cx: &App) -> Div {
@@ -1371,12 +1372,12 @@ pub fn transform_menu(board: &Entity<Board>, cx: &App) -> Div {
         })
         .w(px(30.))
         .h(px(28.))
-        .child(icon(IconName::RotateCwSquare, 14., crate::theme::muted()))
+        .child(icon(icons::RESTART_SQUARE, 14., Theme::get().text_muted))
     };
     let panel = {
         let board = board.clone();
         move || {
-            let item = |id: &'static str, label: &'static str, name: IconName, act: fn(&mut Board, &mut Context<Board>)| {
+            let item = |id: &'static str, label: &'static str, name: &'static str, act: fn(&mut Board, &mut Context<Board>)| {
                 let board = board.clone();
                 div()
                     .id(id)
@@ -1403,11 +1404,11 @@ pub fn transform_menu(board: &Entity<Board>, cx: &App) -> Div {
                 .p(px(5.))
                 .flex()
                 .flex_col()
-                .child(item("flip-h", "Flip horizontal", IconName::FlipHorizontal2, |b, cx| b.flip(true, cx)))
-                .child(item("flip-v", "Flip vertical", IconName::FlipVertical2, |b, cx| b.flip(false, cx)))
+                .child(item("flip-h", "Flip horizontal", icons::FLIP_HORIZONTAL, |b, cx| b.flip(true, cx)))
+                .child(item("flip-v", "Flip vertical", icons::FLIP_VERTICAL, |b, cx| b.flip(false, cx)))
                 .child(div().h(px(1.)).my(px(4.)).bg(white(0.12)))
-                .child(item("rot-l", "Rotate left", IconName::RotateCcw, |b, cx| b.rotate(false, cx)))
-                .child(item("rot-r", "Rotate right", IconName::RotateCw, |b, cx| b.rotate(true, cx)))
+                .child(item("rot-l", "Rotate left", icons::UNDO_LEFT_ROUND, |b, cx| b.rotate(false, cx)))
+                .child(item("rot-r", "Rotate right", icons::UNDO_RIGHT_ROUND, |b, cx| b.rotate(true, cx)))
                 .into_any_element()
         }
     };

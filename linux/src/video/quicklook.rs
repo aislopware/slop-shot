@@ -5,16 +5,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui::{AnyWindowHandle, App, AppContext as _, Context, Entity, FocusHandle, Global, KeyDownEvent, ObjectFit, RenderImage, Task, Window, div, img, prelude::*, px};
-use gpui_component::slider::{Slider, SliderEvent, SliderState};
-use gpui_component::window_border;
-use gpui_kit_assets::IconName;
+use gpui::{AnyWindowHandle, App, AppContext as _, Context, FocusHandle, Global, KeyDownEvent, ObjectFit, RenderImage, Task, Window, div, img, prelude::*, px};
 
 use super::editor::timecode;
 use super::model::TimeMap;
 use super::player::{self, Player};
+use crate::icons;
 use crate::preview::white;
-use crate::{alert, board, chrome};
+use crate::theme::Theme;
+use crate::widgets::{self, SlideEvent};
+use crate::{alert, board, chrome, motion};
 
 struct QuickLookWindow {
     handle: AnyWindowHandle,
@@ -28,8 +28,7 @@ pub fn open(file: PathBuf, cx: &mut App) {
     let title = format!("Quick Look — {name}");
     let options = chrome::window_options(&title, (720., 460.), Some((420., 280.)), cx);
     let result = cx.open_window(options, |window, cx| {
-        let view = cx.new(|cx| QuickLook::new(file, title, window, cx));
-        cx.new(|cx| gpui_component::Root::new(view, window, cx))
+        cx.new(|cx| QuickLook::new(file, title, window, cx))
     });
     match result {
         Ok(handle) => cx.set_global(QuickLookWindow { handle: handle.into() }),
@@ -51,11 +50,11 @@ struct QuickLook {
     error: Option<String>,
     frame: Option<Arc<RenderImage>>,
     stale: Vec<Arc<RenderImage>>,
-    scrubber: Entity<SliderState>,
+    /// The scrubber's position, 0..1.
+    scrub: f32,
     scrubbing: bool,
     muted: bool,
     focus: FocusHandle,
-    _subs: Vec<gpui::Subscription>,
     _loop: Task<()>,
 }
 
@@ -63,18 +62,6 @@ impl QuickLook {
     fn new(file: PathBuf, title: String, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
-        let scrubber = cx.new(|_| SliderState::new().min(0.).max(1.).step(0.001).default_value(0.));
-        let sub = cx.subscribe(&scrubber, |this: &mut Self, _, event: &SliderEvent, cx| {
-            let Some(player) = &mut this.player else { return };
-            match event {
-                SliderEvent::Change(v) => {
-                    this.scrubbing = true;
-                    player.seek_comp(v.start() as f64 * player.map().duration());
-                }
-                SliderEvent::Release(_) => this.scrubbing = false,
-            }
-            cx.notify();
-        });
         let ticker = cx.spawn_in(window, async move |this, cx| {
             loop {
                 cx.background_executor().timer(Duration::from_millis(15)).await;
@@ -103,7 +90,7 @@ impl QuickLook {
             });
         })
         .detach();
-        Self { title, player: None, error: None, frame: None, stale: vec![], scrubber, scrubbing: false, muted: false, focus, _subs: vec![sub], _loop: ticker }
+        Self { title, player: None, error: None, frame: None, stale: vec![], scrub: 0., scrubbing: false, muted: false, focus, _loop: ticker }
     }
 
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -121,10 +108,23 @@ impl QuickLook {
         let (comp, total) = (player.comp, player.map().duration());
         if (comp, player.is_playing()) != before {
             if !self.scrubbing && total > 0. {
-                self.scrubber.update(cx, |s, cx| s.set_value((comp / total) as f32, window, cx));
+                self.scrub = (comp / total) as f32;
             }
             cx.notify();
         }
+    }
+
+    fn slide(&mut self, event: SlideEvent, cx: &mut Context<Self>) {
+        let Some(player) = &mut self.player else { return };
+        match event {
+            SlideEvent::Change(v) => {
+                self.scrubbing = true;
+                self.scrub = v;
+                player.seek_comp(v as f64 * player.map().duration());
+            }
+            SlideEvent::Release => self.scrubbing = false,
+        }
+        cx.notify();
     }
 
     fn toggle(&mut self, cx: &mut Context<Self>) {
@@ -153,10 +153,12 @@ impl QuickLook {
 }
 
 impl Render for QuickLook {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        motion::window_frame(window);
         let (comp, total, playing) = self.player.as_ref().map_or((0., 0., false), |p| (p.comp, p.map().duration(), p.is_playing()));
+        let scrubber = widgets::slider("scrubber", Theme::get(), self.scrub, cx, |this, event, _, cx| this.slide(event, cx));
         let gray = gpui::hsla(0., 0., 0.85, 1.);
-        let button = |id: &'static str, icon: IconName, tip: &'static str, f: fn(&mut Self, &mut Context<Self>)| {
+        let button = |id: &'static str, icon: &'static str, tip: &'static str, f: fn(&mut Self, &mut Context<Self>)| {
             board::hud_button(id, tip, cx.listener(move |this, _, _, cx| f(this, cx))).size(px(28.)).child(board::icon(icon, 13., gray))
         };
         let picture = match (&self.frame, &self.error) {
@@ -164,17 +166,15 @@ impl Render for QuickLook {
             (Some(frame), _) => img(frame.clone()).size_full().object_fit(ObjectFit::Contain).into_any_element(),
             _ => div().into_any_element(),
         };
-        window_border().child(
-            div()
+        let content = div()
                 .id("quick-look")
                 .track_focus(&self.focus)
                 .on_key_down(cx.listener(Self::key_down))
                 .size_full()
                 .flex()
                 .flex_col()
-                .bg(gpui::black())
                 .text_color(gpui::white())
-                .child(chrome::title_bar(self.title.clone(), cx).bg(gpui::hsla(0., 0., 0.13, 1.)))
+                .child(chrome::title_bar(self.title.clone()).bg(gpui::hsla(0., 0., 0.13, 1.)))
                 .child(div().flex_1().min_h_0().flex().items_center().justify_center().child(picture))
                 .child(
                     div()
@@ -187,12 +187,12 @@ impl Render for QuickLook {
                         .bg(gpui::hsla(0., 0., 0.13, 1.))
                         .border_t_1()
                         .border_color(white(0.08))
-                        .child(button("play", if playing { IconName::Pause } else { IconName::Play }, "Play / Pause (Space)", Self::toggle))
+                        .child(button("play", if playing { icons::PAUSE } else { icons::PLAY }, "Play / Pause (Space)", Self::toggle))
                         .child(div().text_size(px(11.)).text_color(gpui::hsla(0., 0., 0.75, 1.)).child(timecode(comp, false)))
-                        .child(div().flex_1().child(Slider::new(&self.scrubber)))
+                        .child(div().flex_1().child(scrubber.w_full()))
                         .child(div().text_size(px(11.)).text_color(gpui::hsla(0., 0., 0.75, 1.)).child(timecode(total, false)))
-                        .child(button("mute", if self.muted { IconName::VolumeX } else { IconName::Volume2 }, "Mute", Self::toggle_mute)),
-                ),
-        )
+                        .child(button("mute", if self.muted { icons::VOLUME_CROSS } else { icons::VOLUME_LOUD }, "Mute", Self::toggle_mute)),
+                );
+        chrome::frame(window, true, gpui::black(), content)
     }
 }

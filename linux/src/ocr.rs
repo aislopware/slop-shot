@@ -10,13 +10,13 @@ use gpui::{
     AnyWindowHandle, App, AppContext as _, Context, Entity, FocusHandle, Global, KeyDownEvent, ObjectFit, Window,
     div, img, prelude::*, px,
 };
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::{InputEvent, Textarea, TextareaState};
-use gpui_component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _};
-use gpui_kit_assets::IconName;
+use gpui_base::input::{InputEvent, Textarea, TextareaState};
 use image::RgbaImage;
 
-use crate::{alert, card, history, output, preview};
+use crate::icons::{self, icon};
+use crate::theme::{self, Theme};
+use crate::widgets::{self, ActionTone};
+use crate::{alert, card, chrome, history, motion, output, preview};
 
 /// One recognised word, `rect` in image pixels.
 #[derive(Clone, Debug)]
@@ -200,8 +200,7 @@ pub fn open(result: Scan, image: Option<Arc<RgbaImage>>, copy: bool, cx: &mut Ap
     let title = if result.qr_codes.is_empty() { "Text Recognition" } else { "Text & QR Recognition" };
     let options = crate::chrome::window_options(title, (960., 620.), Some((760., 440.)), cx);
     let opened = cx.open_window(options, |window, cx| {
-        let view = cx.new(|cx| OcrView::new(title, result, image, copy, window, cx));
-        cx.new(|cx| gpui_component::Root::new(view, window, cx))
+        cx.new(|cx| OcrView::new(title, result, image, copy, window, cx))
     });
     match opened {
         Ok(handle) => cx.set_global(OcrWindow(handle.into())),
@@ -266,21 +265,24 @@ impl OcrView {
         }
     }
 
-    fn toolbar(&self, cx: &App) -> impl IntoElement {
+    fn toolbar(&self) -> impl IntoElement {
+        let t = Theme::get();
         div()
             .flex()
             .items_center()
-            .gap_2()
-            .px_4()
-            .h(px(48.))
+            .gap(px(8.))
+            .px(px(16.))
+            .h(px(44.))
             .flex_none()
-            .bg(cx.theme().title_bar)
-            .text_color(cx.theme().muted_foreground)
-            .child(Icon::new(IconName::ScanText).size(px(15.)))
+            .border_b_1()
+            .border_color(t.border)
+            .text_color(t.text_muted)
+            .child(icon(icons::TEXT_SELECTION).size(px(15.)).text_color(t.text_muted))
             .child(div().text_size(px(13.)).font_weight(gpui::FontWeight::MEDIUM).child("Recognized text"))
     }
 
-    fn preview(&self, cx: &App) -> Option<impl IntoElement> {
+    fn preview(&self) -> Option<impl IntoElement> {
+        let t = Theme::get();
         let (image, w, h) = self.image.clone()?;
         Some(
             div()
@@ -289,10 +291,10 @@ impl OcrView {
                 .flex()
                 .flex_col()
                 .gap(px(10.))
-                .p_4()
-                .bg(cx.theme().secondary.opacity(0.4))
+                .p(px(16.))
+                .bg(theme::wash(0.05))
                 .border_r_1()
-                .border_color(cx.theme().border)
+                .border_color(t.border)
                 .child(
                     div().flex_1().min_h_0().flex().items_center().justify_center().child(
                         img(image)
@@ -301,26 +303,27 @@ impl OcrView {
                             .object_fit(ObjectFit::Contain)
                             .rounded(px(8.))
                             .border_1()
-                            .border_color(cx.theme().border),
+                            .border_color(t.border),
                     ),
                 )
-                .child(div().text_xs().text_center().text_color(cx.theme().muted_foreground).child(format!("{w} × {h} px"))),
+                .child(div().text_size(px(12.)).text_center().text_color(t.text_faint).child(format!("{w} × {h} px"))),
         )
     }
 
     fn footer(&self, shown: &str, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = Theme::get();
         let words = shown.split_whitespace().count();
         let chars = shown.chars().count();
+        let empty = shown.is_empty();
         div()
             .flex()
             .flex_col()
-            .gap_2()
-            .px_4()
+            .gap(px(8.))
+            .px(px(16.))
             .py(px(10.))
             .flex_none()
-            .bg(cx.theme().title_bar)
             .border_t_1()
-            .border_color(cx.theme().border)
+            .border_color(t.border)
             .children(self.qr_codes.iter().enumerate().map(|(i, code)| {
                 let link = code.trim().to_ascii_lowercase();
                 let is_link = link.starts_with("http://") || link.starts_with("https://");
@@ -329,37 +332,45 @@ impl OcrView {
                 div()
                     .flex()
                     .items_center()
-                    .gap_2()
-                    .text_sm()
-                    .child(Icon::new(IconName::QrCode).size(px(14.)).text_color(cx.theme().muted_foreground))
+                    .gap(px(8.))
+                    .text_size(px(13.))
+                    .child(icon(icons::QR_CODE).size(px(14.)).text_color(t.text_muted))
                     .child(
                         div()
                             .id(("qr", i))
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .when(is_link, |d| d.text_color(cx.theme().link).cursor_pointer().on_click(move |_, _, cx| cx.open_url(&open)))
+                            .when(is_link, |d| d.text_color(t.accent).cursor_pointer().on_click(move |_, _, cx| cx.open_url(&open)))
                             .child(code.clone()),
                     )
-                    .child(Button::new(("qr-copy", i)).label("Copy").ghost().small().on_click(cx.listener(move |this, _, _, cx| this.copy(copy.clone(), cx))))
+                    .child(
+                        widgets::text_action(t, ActionTone::Quiet, "Copy")
+                            .id(("qr-copy", i))
+                            .on_click(cx.listener(move |this, _, _, cx| this.copy(copy.clone(), cx))),
+                    )
             }))
-            .when(!self.qr_codes.is_empty(), |d| d.child(div().h(px(1.)).bg(cx.theme().border)))
+            .when(!self.qr_codes.is_empty(), |d| d.child(div().h(px(1.)).bg(widgets::row_divider(t))))
             .child(
                 div()
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(div().text_xs().text_color(cx.theme().muted_foreground).child(format!("{chars} characters · {words} words")))
+                    .child(div().text_size(px(12.)).text_color(t.text_faint).child(format!("{chars} characters · {words} words")))
                     .child(
-                        Button::new("copy-text")
-                            .icon(Icon::new(if self.copied { IconName::Check } else { IconName::Copy }))
-                            .label(if self.copied { "Copied" } else { "Copy text" })
-                            .w(px(120.))
-                            .disabled(shown.is_empty())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                let s = this.text.read(cx).value().to_string();
-                                this.copy(s, cx);
-                            })),
+                        widgets::action_button(t, ActionTone::Filled)
+                            .id("copy-text")
+                            .min_w(px(120.))
+                            .justify_center()
+                            .child(icon(if self.copied { icons::CHECK } else { icons::COPY }).size(px(14.)).text_color(t.text_muted))
+                            .child(if self.copied { "Copied" } else { "Copy text" })
+                            .when(empty, |b| b.opacity(0.5).cursor_default())
+                            .when(!empty, |b| {
+                                b.on_click(cx.listener(|this, _, _, cx| {
+                                    let s = this.text.read(cx).value().to_string();
+                                    this.copy(s, cx);
+                                }))
+                            }),
                     ),
             )
     }
@@ -367,56 +378,52 @@ impl OcrView {
 
 impl Render for OcrView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        motion::window_frame(window);
+        let t = Theme::get();
         if let Some(text) = self.pending_copy.take_if(|_| window.is_window_active()) {
             output::copy_text(text, cx);
         }
         let shown = self.text.read(cx).value().to_string();
         let blank = shown.trim().is_empty();
-        let preview = self.preview(cx);
-        gpui_component::window_border().child(
-            div()
-                .track_focus(&self.focus)
-                .on_key_down(cx.listener(Self::key_down))
-                .size_full()
-                .flex()
-                .flex_col()
-                .bg(cx.theme().background)
-                .text_color(cx.theme().foreground)
-                .child(crate::chrome::title_bar(self.title, cx))
-                .child(self.toolbar(cx))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .flex()
-                        .border_t_1()
-                        .border_color(cx.theme().border)
-                        .children(preview)
-                        .child(
-                            div()
-                                .relative()
-                                .flex_1()
-                                .min_w_0()
-                                .p_2()
-                                .child(Textarea::new(&self.text).h_full().appearance(false).text_size(px(14.)))
-                                .when(blank, |d| {
-                                    d.child(
-                                        div()
-                                            .absolute()
-                                            .inset_0()
-                                            .flex()
-                                            .flex_col()
-                                            .items_center()
-                                            .justify_center()
-                                            .gap(px(6.))
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(Icon::new(IconName::FileX).size(px(30.)))
-                                            .child("No text found in this capture"),
-                                    )
-                                }),
-                        ),
-                )
-                .child(self.footer(&shown, cx)),
-        )
+        let content = div()
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(Self::key_down))
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(chrome::title_bar(self.title))
+            .child(self.toolbar())
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .children(self.preview())
+                    .child(
+                        div()
+                            .relative()
+                            .flex_1()
+                            .min_w_0()
+                            .p(px(12.))
+                            .child(div().size_full().text_size(px(14.)).line_height(px(21.)).child(Textarea::new(&self.text)))
+                            .when(blank, |d| {
+                                d.child(
+                                    div()
+                                        .absolute()
+                                        .inset_0()
+                                        .flex()
+                                        .flex_col()
+                                        .items_center()
+                                        .justify_center()
+                                        .gap(px(6.))
+                                        .text_color(t.text_faint)
+                                        .child(icon(icons::FILE_REMOVE).size(px(30.)).text_color(t.text_faint))
+                                        .child("No text found in this capture"),
+                                )
+                            }),
+                    ),
+            )
+            .child(self.footer(&shown, cx));
+        chrome::frame(window, true, t.surface, content)
     }
 }

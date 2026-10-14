@@ -15,9 +15,8 @@ use gpui::{
     StyledImage as _, Window, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, canvas, div,
     hsla, img, point, prelude::*, px, size,
 };
-use gpui_component::Icon;
-use gpui_kit_assets::IconName;
 
+use crate::icons;
 use crate::board::tinted_button;
 use crate::card::{Event, emit, find_display, usable_area};
 use crate::preview::{hud, white};
@@ -222,10 +221,10 @@ impl RecordBar {
     const HEIGHT: f32 = 38.;
 }
 
-fn bar_icon(id: &'static str, icon: IconName, tip: &'static str, tint: Hsla, side: f32, on: impl Fn(&mut App) + 'static) -> impl IntoElement {
+fn bar_icon(id: &'static str, icon: &'static str, tip: &'static str, tint: Hsla, side: f32, on: impl Fn(&mut App) + 'static) -> impl IntoElement {
     tinted_button(id, tip, white(0.12), move |_, _, cx| on(cx))
         .size(px(side + 4.))
-        .child(Icon::new(icon).size(px(side * 0.6)).text_color(tint))
+        .child(icons::icon(icon).size(px(side * 0.6)).text_color(tint))
 }
 
 impl Render for RecordBar {
@@ -275,7 +274,7 @@ impl Render for RecordBar {
                 .items_center()
                 .gap(px(8.))
                 .text_color(gpui::white())
-                .child(bar_icon("stop", IconName::Square, "Stop & save", red(), 22., |_| emit(Event::RecordStop)))
+                .child(bar_icon("stop", icons::STOP, "Stop & save", red(), 22., |_| emit(Event::RecordStop)))
                 .child(div().size(px(8.)).rounded_full().bg(if self.paused { yellow() } else { red() }).opacity(dot))
                 .child(
                     div()
@@ -287,25 +286,25 @@ impl Render for RecordBar {
                 .child(div().w(px(1.)).h(px(20.)).bg(white(0.18)))
                 .child(bar_icon(
                     "pause",
-                    if self.paused { IconName::Play } else { IconName::Pause },
+                    if self.paused { icons::PLAY } else { icons::PAUSE },
                     if self.paused { "Resume" } else { "Pause" },
                     gpui::white(),
                     24.,
                     toggle_pause,
                 ))
-                .child(bar_icon("restart", IconName::RotateCcw, "Restart", gpui::white(), 24., restart))
-                .child(bar_icon("discard", IconName::Trash, "Discard (don't save)", gpui::white(), 24., |_| emit(Event::RecordDiscard)))
+                .child(bar_icon("restart", icons::RESTART, "Restart", gpui::white(), 24., restart))
+                .child(bar_icon("discard", icons::TRASH_BIN_MINIMALISTIC, "Discard (don't save)", gpui::white(), 24., |_| emit(Event::RecordDiscard)))
                 .when(self.mic, |d| {
                     d.child(bar_icon(
                         "mic",
-                        if self.muted { IconName::MicOff } else { IconName::Mic },
+                        if self.muted { icons::MICROPHONE_OFF } else { icons::MICROPHONE },
                         if self.muted { "Unmute microphone" } else { "Mute microphone" },
                         if self.muted { red() } else { gpui::white() },
                         24.,
                         mute,
                     ))
                 })
-                .child(Icon::new(IconName::GripVertical).size(px(12.)).text_color(white(0.35))),
+                .child(icons::icon(icons::DRAG_HANDLE).size(px(12.)).text_color(white(0.35))),
         )
     }
 }
@@ -518,7 +517,7 @@ impl Render for Processing {
                 .justify_center()
                 .gap(px(14.))
                 .text_color(gpui::white())
-                .child(Icon::new(IconName::LoaderCircle).size(px(26.)).text_color(gpui::white()).rotate(gpui::radians(turn * std::f32::consts::TAU)))
+                .child(icons::icon(icons::LOADER).size(px(26.)).text_color(gpui::white()).with_transformation(gpui::Transformation::rotate(gpui::radians(turn * std::f32::consts::TAU))))
                 .child(div().text_size(px(12.)).font_weight(gpui::FontWeight::MEDIUM).child("Building image…")),
         )
     }

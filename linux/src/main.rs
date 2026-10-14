@@ -10,11 +10,14 @@ mod frames;
 mod gifwriter;
 mod history;
 mod hud;
+mod icons;
 mod ipc;
 mod media;
+mod motion;
 mod ocr;
 mod output;
 mod overlay;
+mod popover;
 mod prefs;
 mod preview;
 mod raster;
@@ -32,10 +35,9 @@ mod theme;
 mod tray;
 mod ui;
 mod video;
+mod widgets;
 
-use std::borrow::Cow;
-
-use gpui::{App, AssetSource, QuitMode, SharedString};
+use gpui::{App, QuitMode};
 
 use crate::ipc::{Command, Instance};
 use crate::overlay::{Mode, Purpose};
@@ -65,43 +67,6 @@ Commands:
   quit          Quit the running instance
 
 Starting SlopShot again while it runs opens Settings.";
-
-gpui_kit_assets::icon_assets!(
-    ExtraIcons,
-    [
-        MousePointer2, RectangleHorizontal, Circle, Slash, ArrowUpRight, Highlighter, Droplet, PenTool, Type, Baseline,
-        Check, Undo2, Trash, RotateCwSquare, FlipHorizontal2, FlipVertical2, RotateCcw, RotateCw, Minus, Plus, Share,
-        Copy, X, Download, Camera, Scan, Pipette, Pin, PinOff, SquarePen, Share2, Settings, Hand, Keyboard, Info,
-        Eye, Scissors, Square, Pause, Mic, MicOff, GripVertical, LoaderCircle, Timer, Sticker,
-        Folder, CircleCheck, TriangleAlert, CircleQuestionMark, Lock, ScanText, ChevronsUpDown, CircleDot, QrCode,
-        FileX, TextAlignStart, Image, CirclePlay, Play, Search, RotateCcwClock, TextSearch, Gauge, Snowflake, ZoomIn,
-        EyeOff, WandSparkles, SkipBack, ChevronDown, Volume2, VolumeX, Hourglass, ChevronLeft, CircleArrowDown, Package,
-        RefreshCw, WifiOff
-    ]
-);
-
-/// Component icons plus the editor's tool icons.
-pub struct Assets;
-
-impl AssetSource for Assets {
-    fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
-        if path == "app-icon.png" {
-            return Ok(Some(Cow::Borrowed(include_bytes!("../data/icons/hicolor/128x128/apps/com.thanglb.slopshot.png"))));
-        }
-        match ExtraIcons.load(path)? {
-            Some(bytes) => Ok(Some(bytes)),
-            None => gpui_kit_assets::Assets.load(path),
-        }
-    }
-
-    fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
-        let mut paths = gpui_kit_assets::Assets.list(path)?;
-        paths.extend(ExtraIcons.list(path)?);
-        paths.sort();
-        paths.dedup();
-        Ok(paths)
-    }
-}
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("slopshot=info")).init();
@@ -147,10 +112,10 @@ fn main() {
     ipc::serve(listener, tx.clone());
 
     gpui_platform::application()
-        .with_assets(Assets)
+        .with_assets(icons::Assets)
         .with_quit_mode(QuitMode::Explicit)
         .run(move |cx: &mut App| {
-            gpui_component::init(cx);
+            gpui_base::init(cx);
             theme::install(cx);
             cx.set_global(Settings::load());
             card::init(flow::on_card_event, cx);

@@ -1,21 +1,20 @@
 //! Settings window: General, Capture, Privacy, Shortcuts and About pages beside a
-//! sidebar, in zeron's layout; every change applies and persists immediately.
+//! section list, in Slopty's settings layout; every change applies and persists
+//! immediately.
 
 use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui::{
     AnyElement, AnyWindowHandle, App, AppContext as _, Context, Entity, FocusHandle, KeyDownEvent,
-    PathPromptOptions, SharedString, Subscription, Window, div, img, prelude::*, px,
+    PathPromptOptions, SharedString, Window, div, img, prelude::*, px,
 };
-use gpui_component::IndexPath;
-use gpui_component::searchable_list::SearchableVec;
-use gpui_component::select::{Select, SelectEvent, SelectState};
-use gpui_kit_assets::IconName;
 
+use crate::icons::{self, icon};
 use crate::settings::{ColorFormat, ImageFormat, PreviewSide, Settings, config_dir, display_path};
-use crate::ui::{self, Tone};
-use crate::{capture, shortcuts, theme};
+use crate::theme::{self, Theme};
+use crate::widgets::{self, ActionTone, SelectOption, SelectState};
+use crate::{capture, chrome, motion, shortcuts, ui};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tab {
@@ -37,15 +36,22 @@ impl Tab {
         }
     }
 
-    fn icon(self) -> IconName {
+    fn icon(self) -> &'static str {
         match self {
-            Tab::General => IconName::Settings,
-            Tab::Capture => IconName::Scan,
-            Tab::Privacy => IconName::Hand,
-            Tab::Shortcuts => IconName::Keyboard,
-            Tab::About => IconName::Info,
+            Tab::General => icons::SETTINGS,
+            Tab::Capture => icons::FULL_SCREEN,
+            Tab::Privacy => icons::SHIELD_KEYHOLE_MINIMALISTIC,
+            Tab::Shortcuts => icons::KEYBOARD,
+            Tab::About => icons::INFO_CIRCLE,
         }
     }
+
+    /// Groups are set apart by spacing alone.
+    fn starts_group(self) -> bool {
+        matches!(self, Tab::Privacy | Tab::About)
+    }
+
+    const ALL: [Tab; 5] = [Tab::General, Tab::Capture, Tab::Privacy, Tab::Shortcuts, Tab::About];
 }
 
 struct PrefsWindow(AnyWindowHandle, Entity<Prefs>);
@@ -66,12 +72,12 @@ pub fn open_tab(tab: Tab, cx: &mut App) {
         });
         return;
     }
-    let options = crate::chrome::window_options("Settings", (820., 560.), Some((700., 440.)), cx);
+    let options = chrome::window_options("Settings", (900., 620.), Some((720., 460.)), cx);
     let mut prefs = None;
     let result = cx.open_window(options, |window, cx| {
         let view = cx.new(|cx| Prefs::new(tab, window, cx));
         prefs = Some(view.clone());
-        cx.new(|cx| gpui_component::Root::new(view, window, cx))
+        view
     });
     match (result, prefs) {
         (Ok(handle), Some(prefs)) => cx.set_global(PrefsWindow(handle.into(), prefs)),
@@ -104,51 +110,23 @@ fn set_autostart(enabled: bool) -> std::io::Result<()> {
     )
 }
 
-type Choice = SelectState<SearchableVec<SharedString>>;
-
 pub(crate) struct Prefs {
     tab: Tab,
     focus: FocusHandle,
-    image_format: Entity<Choice>,
-    preview_side: Entity<Choice>,
-    color_format: Entity<Choice>,
+    image_format: SelectState,
+    preview_side: SelectState,
+    color_format: SelectState,
     /// The shortcut whose recorder is listening.
     recording: Option<&'static str>,
     shortcut_error: Option<SharedString>,
     permission: Option<bool>,
     grant_copied: bool,
-    _subscriptions: Vec<Subscription>,
-}
-
-fn choice<T: Copy + PartialEq + 'static>(
-    all: &'static [T],
-    label: fn(T) -> &'static str,
-    current: T,
-    set: fn(&mut Settings, T),
-    window: &mut Window,
-    cx: &mut Context<Prefs>,
-) -> (Entity<Choice>, Subscription) {
-    let items: Vec<SharedString> = all.iter().map(|v| label(*v).into()).collect();
-    let selected = all.iter().position(|v| *v == current).map(IndexPath::new);
-    let state = cx.new(|cx| SelectState::new(SearchableVec::new(items), selected, window, cx));
-    let sub = cx.subscribe(&state, move |_, _, event: &SelectEvent<SearchableVec<SharedString>>, cx| {
-        let SelectEvent::Confirm(Some(value)) = event else { return };
-        if let Some(v) = all.iter().find(|v| label(**v) == value.as_ref()) {
-            let v = *v;
-            Settings::update(cx, |s| set(s, v));
-        }
-    });
-    (state, sub)
 }
 
 const SIDES: [PreviewSide; 2] = [PreviewSide::Left, PreviewSide::Right];
 
 impl Prefs {
     pub(crate) fn new(tab: Tab, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let s = Settings::get(cx).clone();
-        let (image_format, a) = choice(&ImageFormat::ALL, ImageFormat::label, s.image_format, |s, v| s.image_format = v, window, cx);
-        let (preview_side, b) = choice(&SIDES, PreviewSide::label, s.preview_side, |s, v| s.preview_side = v, window, cx);
-        let (color_format, c) = choice(&ColorFormat::ALL, ColorFormat::label, s.color_format, |s, v| s.color_format = v, window, cx);
         // The Privacy tab refreshes every 2 s, as on macOS.
         cx.spawn(async move |this, cx| {
             loop {
@@ -172,14 +150,13 @@ impl Prefs {
         Self {
             tab,
             focus,
-            image_format,
-            preview_side,
-            color_format,
+            image_format: SelectState::default(),
+            preview_side: SelectState::default(),
+            color_format: SelectState::default(),
             recording: None,
             shortcut_error: None,
             permission: None,
             grant_copied: false,
-            _subscriptions: vec![a, b, c],
         }
     }
 
@@ -206,42 +183,64 @@ impl Prefs {
         cx.notify();
     }
 
-    fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let group = |tabs: &[Tab], cx: &mut Context<Self>| {
-            div().flex().flex_col().gap(px(1.)).children(tabs.iter().map(|&tab| {
-                ui::nav_item(tab.title(), tab.icon(), tab.title(), self.tab == tab).on_click(cx.listener(move |p, _, _, cx| {
+    fn sidebar(&self, theme: &Theme, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let tabs = Tab::ALL.map(|tab| {
+            let selected = self.tab == tab;
+            let key = format!("prefs-nav-{}", tab.title());
+            let hover_key = format!("{key}-hover");
+            let selection_t =
+                widgets::tab_selection_t(window, format!("{key}-selection"), selected, motion::reduced_motion(cx));
+            let glyph =
+                motion::hover_blend(&hover_key, motion::mix(theme.text_muted, theme.text, selection_t), theme.text);
+            widgets::section_tab(theme, selected, selection_t, SharedString::from(key), hover_key)
+                .when(tab.starts_group(), |el| el.mt(px(Theme::SPACE_LG)))
+                .on_click(cx.listener(move |p, _, _, cx| {
                     p.tab = tab;
                     p.recording = None;
                     cx.notify();
                 }))
-            }))
-        };
+                .child(icon(tab.icon()).size(px(16.0)).text_color(glyph))
+                .child(tab.title())
+        });
+        let radius = chrome::corner_radius(window);
         div()
+            .relative()
             .w(px(SIDEBAR_WIDTH))
             .h_full()
             .flex_none()
-            .flex()
-            .flex_col()
-            .gap(px(16.))
-            .px(px(8.))
-            .bg(theme::sidebar())
-            .border_r_1()
-            .border_color(theme::ink(0.06))
-            .child(drag_strip())
-            .child(group(&[Tab::General, Tab::Capture], cx))
-            .child(group(&[Tab::Privacy, Tab::Shortcuts], cx))
-            .child(group(&[Tab::About], cx))
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .when(radius > 0., |el| el.rounded_tl(px(radius)).rounded_bl(px(radius)))
+                    .bg(theme::wash(0.05))
+                    .border_r_1()
+                    .border_color(theme.border),
+            )
+            .child(chrome::drag_strip("prefs-sidebar-drag").absolute().inset_0())
+            .child(
+                div()
+                    .relative()
+                    .pt(px(Theme::TITLEBAR_HEIGHT + Theme::SPACE_MD))
+                    .px(px(Theme::SPACE_SM))
+                    .pb(px(Theme::SPACE_SM))
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .children(tabs),
+            )
     }
 
-    fn general(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn general(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let t = Theme::get();
         let s = Settings::get(cx).clone();
         page("General", "How SlopShot starts, and where captures go.")
-            .child(ui::section(
+            .child(widgets::section(t,
                 "Startup",
-                ui::block()
+                widgets::section_card(t)
                     .child(
-                        ui::row(true).child(ui::row_text("Launch SlopShot at login", None)).child(
-                            ui::switch("autostart", autostart_path().exists()).on_click(|_, _, cx| {
+                        widgets::card_row(t, true).child(widgets::row_text(t, "Launch SlopShot at login", None)).child(
+                            switch("autostart", autostart_path().exists()).on_click(|_, _, cx| {
                                 if let Err(err) = set_autostart(!autostart_path().exists()) {
                                     log::error!("autostart: {err}");
                                 }
@@ -250,27 +249,27 @@ impl Prefs {
                         ),
                     )
                     .child(
-                        ui::row(false)
-                            .child(ui::row_text(
+                        widgets::card_row(t, false)
+                            .child(widgets::row_text(t,
                                 "Show icon in the top bar",
                                 (!s.show_tray_icon).then_some("Hotkeys keep working. To get back here, open SlopShot again from the app grid.".into()),
                             ))
-                            .child(ui::switch("tray", s.show_tray_icon).on_click(move |_, _, cx| {
+                            .child(switch("tray", s.show_tray_icon).on_click(move |_, _, cx| {
                                 Settings::update(cx, |s| s.show_tray_icon = !s.show_tray_icon);
                                 crate::tray::sync(cx);
                             })),
                     ),
             ))
-            .child(ui::section(
+            .child(widgets::section(t,
                 "Save location",
-                ui::block().child(
-                    ui::row(true)
-                        .child(ui::row_tile(IconName::Folder))
-                        .child(ui::row_text(
+                widgets::section_card(t).child(
+                    widgets::card_row(t, true)
+                        .child(widgets::row_tile(t, icons::FOLDER))
+                        .child(widgets::row_text(t,
                             display_path(&s.save_folder),
                             Some("Captures stay temporary until you press Save on the preview, then land here.".into()),
                         ))
-                        .child(ui::text_button("folder", Tone::Filled, "Choose…").on_click(|_, _, cx| {
+                        .child(text_action("folder", "Choose…").on_click(|_, _, cx| {
                             let receiver = cx.prompt_for_paths(PathPromptOptions {
                                 files: false,
                                 directories: true,
@@ -288,23 +287,24 @@ impl Prefs {
                         })),
                 ),
             ))
-            .child(ui::section(
+            .child(widgets::section(t,
                 "Image format",
-                ui::block().child(
-                    ui::row(true)
-                        .child(ui::row_text("Format", Some("Used when a capture is saved; the editor can save as any of them.".into())))
-                        .child(select(&self.image_format, 140., false)),
+                widgets::section_card(t).child(
+                    widgets::card_row(t, true)
+                        .child(widgets::row_text(t, "Format", Some("Used when a capture is saved; the editor can save as any of them.".into())))
+                        .child(choice("image-format", &ImageFormat::ALL, ImageFormat::label, s.image_format, |s, v| s.image_format = v, &self.image_format, |p| &mut p.image_format, 140., false, window, cx)),
                 ),
             ))
             .into_any_element()
     }
 
-    fn capture(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn capture(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let t = Theme::get();
         let s = Settings::get(cx).clone();
         page("Capture", "What happens while you select, and right after.")
-            .child(ui::section(
+            .child(widgets::section(t,
                 "Selection",
-                ui::block().child(toggle_row(
+                widgets::section_card(t).child(toggle_row(
                     true,
                     "snap",
                     "Snap to window & item edges",
@@ -313,9 +313,9 @@ impl Prefs {
                     |s, v| s.snap = v,
                 )),
             ))
-            .child(ui::section(
+            .child(widgets::section(t,
                 "After capture",
-                ui::block()
+                widgets::section_card(t)
                     .child(toggle_row(
                         true,
                         "inline",
@@ -328,15 +328,15 @@ impl Prefs {
                     .child(toggle_row(false, "sound", "Play a sound", None, s.play_sound, |s, v| s.play_sound = v))
                     .child(toggle_row(false, "thumb", "Show preview thumbnail", None, s.show_thumbnail, |s, v| s.show_thumbnail = v))
                     .child(
-                        ui::row(false)
+                        widgets::card_row(t, false)
                             .when(!s.show_thumbnail, |d| d.opacity(0.5))
-                            .child(ui::row_text("Preview position", Some("Right-handed? Put it on the right, closer to your mouse.".into())))
-                            .child(select(&self.preview_side, 160., !s.show_thumbnail)),
+                            .child(widgets::row_text(t, "Preview position", Some("Right-handed? Put it on the right, closer to your mouse.".into())))
+                            .child(choice("preview-side", &SIDES, PreviewSide::label, s.preview_side, |s, v| s.preview_side = v, &self.preview_side, |p| &mut p.preview_side, 160., !s.show_thumbnail, window, cx)),
                     ),
             ))
-            .child(ui::section(
+            .child(widgets::section(t,
                 "Recording",
-                ui::block()
+                widgets::section_card(t)
                     .child(toggle_row(
                         true,
                         "sys-audio",
@@ -354,29 +354,30 @@ impl Prefs {
                         |s, v| s.record_microphone = v,
                     )),
             ))
-            .child(ui::section(
+            .child(widgets::section(t,
                 "Color picker",
-                ui::block().child(
-                    ui::row(true)
-                        .child(ui::row_text("Copy color as", Some("Press ← → while picking to switch without leaving the screen.".into())))
-                        .child(select(&self.color_format, 180., false)),
+                widgets::section_card(t).child(
+                    widgets::card_row(t, true)
+                        .child(widgets::row_text(t, "Copy color as", Some("Press ← → while picking to switch without leaving the screen.".into())))
+                        .child(choice("color-format", &ColorFormat::ALL, ColorFormat::label, s.color_format, |s, v| s.color_format = v, &self.color_format, |p| &mut p.color_format, 180., false, window, cx)),
                 ),
             ))
             .into_any_element()
     }
 
     fn privacy(&self, cx: &mut Context<Self>) -> AnyElement {
-        let (icon, status, color) = match self.permission {
-            Some(true) => (IconName::CircleCheck, "Granted", theme::success()),
-            Some(false) => (IconName::TriangleAlert, "Not granted", theme::warning()),
-            None => (IconName::CircleQuestionMark, "Not asked yet", theme::muted()),
+        let t = Theme::get();
+        let (glyph, status, color) = match self.permission {
+            Some(true) => (icons::CHECK_CIRCLE, "Granted", t.success),
+            Some(false) => (icons::DANGER_TRIANGLE, "Not granted", t.warning),
+            None => (icons::QUESTION_CIRCLE, "Not asked yet", t.text_muted),
         };
         let s = Settings::get(cx).clone();
         let refused = self.permission == Some(false);
-        let permissions = ui::block()
+        let permissions = widgets::section_card(t)
             .child(
-                ui::row(true)
-                    .child(ui::row_text(
+                widgets::card_row(t, true)
+                    .child(widgets::row_text(t,
                         "Screenshots",
                         Some("Every capture. Without it GNOME blocks SlopShot from reading the screen.".into()),
                     ))
@@ -388,26 +389,27 @@ impl Prefs {
                             .gap(px(6.))
                             .text_size(px(12.5))
                             .text_color(color)
-                            .child(ui::icon(icon, 14., color))
+                            .child(icon(glyph).size(px(14.)).text_color(color))
                             .child(status),
                     )
                     .when(self.permission != Some(true), |d| {
                         d.child(
-                            ui::text_button("ask", Tone::Filled, if refused { "Ask Again" } else { "Ask Now" })
+                            text_action("ask", if refused { "Ask Again" } else { "Ask Now" })
                                 .on_click(move |_, _, cx| capture::ask_permission(refused, None, cx)),
                         )
                     }),
             )
             .when(self.permission != Some(true), |d| {
                 d.child(
-                    ui::row(false)
-                        .child(ui::row_text(
+                    widgets::card_row(t, false)
+                        .child(widgets::row_text(t,
                             "GNOME's prompt never appears?",
                             Some("Copy the command, paste it into Terminal and press Enter.".into()),
                         ))
                         .child(
-                            ui::button("copy-grant", Tone::Filled)
-                                .child(ui::icon(if self.grant_copied { IconName::Check } else { IconName::Copy }, 14., theme::muted()))
+                            widgets::action_button(t, ActionTone::Filled)
+                                .id("copy-grant")
+                                .child(icon(if self.grant_copied { icons::CHECK } else { icons::COPY }).size(px(14.)).text_color(t.text_muted))
                                 .child(if self.grant_copied { "Copied" } else { "Copy Command" })
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     capture::copy_grant_command(cx);
@@ -418,10 +420,10 @@ impl Prefs {
                 )
             });
         page("Privacy", "Both checks run on-device with Tesseract: no image, and no text read out of one, leaves this computer.")
-            .child(ui::section("Permissions", permissions))
-            .child(ui::section(
+            .child(widgets::section(t, "Permissions", permissions))
+            .child(widgets::section(t,
                 "Sensitive data",
-                ui::block().child(toggle_row(
+                widgets::section_card(t).child(toggle_row(
                     true,
                     "redact",
                     "Scan captures for sensitive data",
@@ -430,9 +432,9 @@ impl Prefs {
                     |s, v| s.redact_scan_on_open = v,
                 )),
             ))
-            .child(ui::section(
+            .child(widgets::section(t,
                 "Search",
-                ui::block().child(toggle_row(
+                widgets::section_card(t).child(toggle_row(
                     true,
                     "index",
                     "Index text inside screenshots",
@@ -445,6 +447,7 @@ impl Prefs {
     }
 
     fn shortcuts(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = Theme::get();
         let rows = shortcuts::SHORTCUTS.iter().enumerate().map(|(i, sc)| {
             let listening = self.recording == Some(sc.id);
             let binding = if listening {
@@ -453,27 +456,30 @@ impl Prefs {
                 shortcuts::current_binding(sc.id).map(|b| shortcuts::display_binding(&b)).unwrap_or_else(|| "—".into())
             };
             let id = sc.id;
-            ui::row(i == 0)
-                .child(ui::row_text(sc.name.trim_start_matches("SlopShot: ").to_owned(), None))
+            widgets::card_row(t, i == 0)
+                .child(widgets::row_text(t, sc.name.trim_start_matches("SlopShot: ").to_owned(), None))
                 .child(
                     div()
                         .id(SharedString::from(format!("rec-{id}")))
                         .flex_none()
                         .min_w(px(120.))
-                        .h(px(28.))
+                        .h(px(widgets::SELECT_HEIGHT))
                         .px(px(10.))
                         .flex()
                         .items_center()
                         .justify_center()
-                        .rounded(px(6.))
+                        .rounded(px(8.))
                         .border_1()
-                        .text_size(px(12.))
+                        .text_size(px(12.5))
                         .cursor_pointer()
                         .map(|d| {
                             if listening {
-                                d.bg(theme::accent().opacity(0.14)).border_color(theme::accent()).text_color(theme::accent())
+                                d.bg(t.accent.opacity(0.14)).border_color(t.accent).text_color(t.accent)
                             } else {
-                                d.bg(theme::fill()).border_color(gpui::transparent_black()).text_color(theme::text()).hover(|s| s.bg(theme::fill_hover()))
+                                d.bg(widgets::select_fill(t, false))
+                                    .border_color(gpui::transparent_black())
+                                    .text_color(t.text)
+                                    .hover(|s| s.bg(widgets::select_fill(t, true)))
                             }
                         })
                         .on_click(cx.listener(move |p, _, window, cx| {
@@ -483,7 +489,7 @@ impl Prefs {
                         }))
                         .child(binding),
                 )
-                .child(ui::icon_button(SharedString::from(format!("reset-{id}")), IconName::Undo2, "Reset to default").on_click(cx.listener(
+                .child(ui::icon_button(format!("reset-{id}"), icons::UNDO_LEFT, "Reset to default").on_click(cx.listener(
                     move |p, _, _, cx| {
                         p.shortcut_error = shortcuts::reset(id).err().map(|e| e.to_string().into());
                         p.recording = None;
@@ -497,62 +503,63 @@ impl Prefs {
             "Bind these commands in your desktop's keyboard settings: slopshot area, slopshot full, slopshot color."
         };
         page("Shortcuts", subtitle)
-            .child(ui::section("Global shortcuts", ui::block().children(rows)))
-            .children(self.shortcut_error.clone().map(|e| div().mt(px(8.)).child(ui::caption(e).text_color(theme::danger()))))
+            .child(widgets::section(t, "Global shortcuts", widgets::section_card(t).children(rows)))
+            .children(self.shortcut_error.clone().map(|e| widgets::error_strip(t, e)))
             .into_any_element()
     }
 
-    fn about(&self, _: &mut Context<Self>) -> AnyElement {
+    fn about(&self) -> AnyElement {
+        let t = Theme::get();
         page("About", "A CleanShot-style capture tool, built native on Linux.")
             .child(
-                ui::block().mt(px(28.)).child(
-                    ui::row(true)
+                widgets::section_card(t).mt(px(32.)).child(
+                    widgets::card_row(t, true)
                         .child(img("app-icon.png").flex_none().size(px(40.)))
-                        .child(ui::row_text("SlopShot", Some(format!("Version {}", env!("CARGO_PKG_VERSION")).into())))
-                        .child(ui::badge("Linux")),
+                        .child(widgets::row_text(t, "SlopShot", Some(format!("Version {}", env!("CARGO_PKG_VERSION")).into())))
+                        .child(widgets::badge(t, "Linux")),
                 ),
             )
             .into_any_element()
     }
 }
 
-const SIDEBAR_WIDTH: f32 = 208.;
-
-/// The clear strip at the top: dragging it moves the window.
-fn drag_strip() -> gpui::Div {
-    div()
-        .h(px(ui::TITLEBAR_HEIGHT))
-        .flex_none()
-        .on_mouse_down(gpui::MouseButton::Left, |_, window, _| window.start_window_move())
-}
+const SIDEBAR_WIDTH: f32 = 256.;
 
 /// The centered page column: title, subtitle, then sections.
 fn page(title: &'static str, subtitle: &'static str) -> gpui::Div {
-    div()
-        .w_full()
-        .max_w(px(600.))
-        .mx_auto()
-        .px(px(32.))
-        .pb(px(40.))
-        .flex()
-        .flex_col()
-        .child(ui::page_header(title, None))
-        .child(ui::page_subtitle(subtitle))
+    let t = Theme::get();
+    widgets::page_column().child(widgets::page_header(t, title, None)).child(widgets::page_subtitle(t, subtitle))
 }
 
-/// Select stretches to its container, so the container holds the width.
-fn select(state: &Entity<Choice>, width: f32, disabled: bool) -> gpui::Div {
-    div().flex_none().w(px(width)).child(
-        Select::new(state)
-            .disabled(disabled)
-            .h(px(ui::CONTROL_HEIGHT))
-            .px(px(10.))
-            .rounded(px(8.))
-            .bg(theme::fill())
-            .border_color(gpui::transparent_black())
-            .text_size(px(12.5))
-            .text_color(theme::text()),
-    )
+/// A select bound to one setting.
+#[allow(clippy::too_many_arguments)]
+fn choice<T: Copy + PartialEq + 'static>(
+    id: &'static str,
+    all: &'static [T],
+    label: fn(T) -> &'static str,
+    current: T,
+    set: fn(&mut Settings, T),
+    state: &SelectState,
+    reach: fn(&mut Prefs) -> &mut SelectState,
+    width: f32,
+    disabled: bool,
+    window: &Window,
+    cx: &mut Context<Prefs>,
+) -> gpui::Div {
+    let select = widgets::select(id, Theme::get(), reach)
+        .options(all.iter().map(|v| SelectOption::new(label(*v))), all.iter().position(|v| *v == current).unwrap_or(0))
+        .width(width)
+        .on_select(move |_, ix, _, cx| Settings::update(cx, |s| set(s, all[ix])))
+        .render(state, window, cx);
+    div().relative().flex_none().child(select).when(disabled, |el| el.child(div().absolute().inset_0().occlude()))
+}
+
+fn switch(id: &'static str, on: bool) -> gpui::Stateful<gpui::Div> {
+    div().id(id).flex_none().cursor_pointer().child(widgets::toggle_switch(Theme::get(), on, id))
+}
+
+fn text_action(id: &'static str, label: &'static str) -> gpui::Stateful<gpui::Div> {
+    widgets::text_action(Theme::get(), ActionTone::Filled, label).id(id)
 }
 
 fn toggle_row(
@@ -563,9 +570,10 @@ fn toggle_row(
     on: bool,
     set: fn(&mut Settings, bool),
 ) -> gpui::Div {
-    ui::row(first)
-        .child(ui::row_text(title, description.map(Into::into)))
-        .child(ui::switch(id, on).on_click(move |_, _, cx| Settings::update(cx, |s| set(s, !on))))
+    let t = Theme::get();
+    widgets::card_row(t, first)
+        .child(widgets::row_text(t, title, description.map(Into::into)))
+        .child(switch(id, on).on_click(move |_, _, cx| Settings::update(cx, |s| set(s, !on))))
 }
 
 fn beep() {
@@ -573,35 +581,46 @@ fn beep() {
 }
 
 impl Render for Prefs {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        motion::window_frame(window);
+        let t = Theme::get();
         let body = match self.tab {
-            Tab::General => self.general(cx),
-            Tab::Capture => self.capture(cx),
+            Tab::General => self.general(window, cx),
+            Tab::Capture => self.capture(window, cx),
             Tab::Privacy => self.privacy(cx),
             Tab::Shortcuts => self.shortcuts(cx),
-            Tab::About => self.about(cx),
+            Tab::About => self.about(),
         };
-        gpui_component::window_border().child(
-            div()
-                .track_focus(&self.focus)
-                .on_key_down(cx.listener(Self::key_down))
-                .size_full()
-                .flex()
-                .bg(theme::bg())
-                .text_color(theme::text())
-                .text_size(px(13.))
-                .child(self.sidebar(cx))
-                .child(
-                    div()
-                        .relative()
-                        .flex_1()
-                        .min_w_0()
-                        .h_full()
-                        .flex()
-                        .flex_col()
-                        .child(drag_strip().w_full().flex().justify_end().items_center().px(px(8.)).child(ui::close_button()))
-                        .child(div().id("prefs-body").flex_1().min_h_0().overflow_y_scroll().child(body)),
-                ),
-        )
+        let content = div()
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(Self::key_down))
+            .size_full()
+            .flex()
+            .text_size(px(13.))
+            .child(self.sidebar(t, window, cx))
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    // Pages scroll to the window's top edge; the column carries the
+                    // titlebar clearance inside the scroll.
+                    .child(div().id("prefs-body").size_full().overflow_y_scroll().child(body))
+                    .child(
+                        chrome::drag_strip("prefs-titlebar")
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .right_0()
+                            .h(px(Theme::TITLEBAR_HEIGHT))
+                            .flex()
+                            .justify_end()
+                            .items_center()
+                            .px(px(8.))
+                            .child(ui::close_button()),
+                    ),
+            );
+        chrome::frame(window, true, t.surface, content)
     }
 }
