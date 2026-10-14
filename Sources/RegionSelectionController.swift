@@ -172,7 +172,7 @@ struct SelectionOverlay: View {
 
     private var hintSubtitle: String {
         model.snapEnabled
-            ? "click a highlighted area  ·  scroll to grow / shrink it  ·  ⌥ free select  ·  ⇧ square  ·  hold space to move  ·  F full screen  ·  esc to cancel"
+            ? "click a highlighted area  ·  scroll to grow / shrink it  ·  ⌥ free select  ·  ⇧ square  ·  ⌘ whole table cells  ·  hold space to move  ·  F full screen  ·  esc to cancel"
             : "⇧ square  ·  hold space to move  ·  F full screen  ·  esc to cancel"
     }
 
@@ -385,6 +385,7 @@ final class SelectionEventView: NSView {
     private var startPoint: NSPoint?
     private var freeMode = false            // giữ ⌥ = tắt bắt dính
     private var squareMode = false          // giữ ⇧ lúc kéo = khung vuông
+    private var cellMode = false            // giữ ⌘ lúc kéo = thả ra thì bung trọn các ô bảng
     private var spaceMove = false           // giữ Space lúc kéo = dời cả khung đang kéo
     private var lastDragPoint: CGPoint?
 
@@ -634,6 +635,13 @@ final class SelectionEventView: NSView {
         return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
     }
 
+    /// Bung khung kéo ra trọn các cột và dòng bảng mà nó chạm tới, trong cửa
+    /// sổ chứa tâm khung. Chưa có ảnh để dò (hoặc không thấy bảng) thì giữ nguyên.
+    private func tableCells(_ r: CGRect) -> CGRect {
+        let limit = windows.window(at: CGPoint(x: r.midX, y: r.midY)) ?? bounds
+        return snap?.cells(covering: r, within: limit) ?? r
+    }
+
     // ── Sự kiện chuột / phím ─────────────────────────────────────────────
     override func mouseEntered(with event: NSEvent) {
         model.pointerInside = true
@@ -664,6 +672,7 @@ final class SelectionEventView: NSView {
         model.pointerInside = true
         model.cursor = convert(event.locationInWindow, from: nil)
         freeMode = event.modifierFlags.contains(.option)
+        cellMode = event.modifierFlags.contains(.command)
         if model.adjusting { updateAdjustCursor(); return }
         refreshHover()
     }
@@ -671,9 +680,11 @@ final class SelectionEventView: NSView {
     override func flagsChanged(with event: NSEvent) {
         let free = event.modifierFlags.contains(.option)
         let square = event.modifierFlags.contains(.shift)
-        guard free != freeMode || square != squareMode else { return }
+        let cell = event.modifierFlags.contains(.command)
+        guard free != freeMode || square != squareMode || cell != cellMode else { return }
         freeMode = free
         squareMode = square
+        cellMode = cell
         if model.dragging, let start = startPoint {
             model.currentRect = rect(from: start, to: model.cursor)
         }
@@ -742,6 +753,7 @@ final class SelectionEventView: NSView {
         }
         guard var start = startPoint else { return }
         squareMode = event.modifierFlags.contains(.shift)
+        cellMode = event.modifierFlags.contains(.command)
         // Giữ Space: cả khung đang kéo trượt theo chuột (điểm neo đi cùng), buông
         // ra thì kéo tiếp cỡ như cũ — giống macOS ⌘⇧4.
         if spaceMove, model.dragging, let last = lastDragPoint {
@@ -765,7 +777,8 @@ final class SelectionEventView: NSView {
 
     // Chuẩn hoá để kéo theo hướng nào cũng ra rect dương, rồi cho bắt dính.
     // Giữ ⇧ = khung vuông (cạnh dài hơn quyết định), không bắt dính vì hút
-    // cạnh sẽ làm méo tỉ lệ.
+    // cạnh sẽ làm méo tỉ lệ. Giữ ⌘ cũng không hút: khung bung ra theo ô bảng
+    // lúc thả, hút cạnh giữa chừng chỉ làm khung giật.
     private func rect(from start: NSPoint, to p: CGPoint) -> CGRect {
         var end = p
         if squareMode {
@@ -776,7 +789,7 @@ final class SelectionEventView: NSView {
         let raw = CGRect(x: min(start.x, end.x), y: min(start.y, end.y),
                          width: abs(end.x - start.x), height: abs(end.y - start.y))
         guard raw.width >= 3, raw.height >= 3 else { return raw }
-        if squareMode {
+        if squareMode || cellMode {
             model.guideXs = []; model.guideYs = []
             return raw
         }
@@ -806,7 +819,7 @@ final class SelectionEventView: NSView {
         lastDragPoint = nil
         spaceMove = false
         if model.dragging, model.currentRect.width >= 5, model.currentRect.height >= 5 {
-            enterAdjust(model.currentRect)
+            enterAdjust(cellMode ? tableCells(model.currentRect) : model.currentRect)
         } else if let hover = model.hover {
             // Bấm 1 phát (không kéo) lên vùng đang được khoanh → khoanh đúng vùng đó.
             enterAdjust(hover.rect)

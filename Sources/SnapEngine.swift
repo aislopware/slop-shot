@@ -546,6 +546,132 @@ final class SnapEngine: @unchecked Sendable {
         return chain.map { CGRect(x: pt($0.l), y: pt($0.t), width: pt($0.r - $0.l), height: pt($0.b - $0.t)) }
     }
 
+    // ═════════════════════════════════════════════════════════════════════
+    // C. GỘP Ô BẢNG — kéo (giữ ⌘) qua vài ô, thả ra thì bung trọn các cột/dòng
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// Biên nhạt nhất vẫn tính là một VẠCH kẻ: vạch kẻ dòng của bảng web hay
+    /// chỉ chênh nền 6–14 mức, dưới hẳn `edgeThreshold`. Chỉ dùng được vì vạch
+    /// còn phải chạy suốt bề ngang đo — chữ hay viền pill thì không.
+    private static let faintThreshold: UInt8 = 6
+
+    /// Khung trọn các cột và dòng mà `drag` chạm tới, trong `limit`.
+    ///
+    /// Bảng thường không kẻ đường dọc giữa các cột, nên cột được dò từ NỘI DUNG:
+    /// chiếu biên dọc của dải hàng đang kéo xuống trục x, cụm mực nào cách nhau
+    /// một khe trắng rộng là 2 cột. Có cột rồi mới dò dòng, trên bề ngang từ
+    /// giữa khe bên này tới giữa khe bên kia của các cột đó. Vạch chạy suốt bề
+    /// ngang đo (viền bảng, vạch kẻ dòng) là VÁCH: cạnh khung dính vào vách,
+    /// khe không có vách thì chừa một lề nhỏ quanh nội dung.
+    func cells(covering drag: CGRect, within limit: CGRect) -> CGRect? {
+        let lx0 = clamp(px(limit.minX), 1, w - 1), lx1 = clamp(px(limit.maxX), 1, w)
+        let ly0 = clamp(px(limit.minY), 1, h - 1), ly1 = clamp(px(limit.maxY), 1, h)
+        let dx0 = clamp(px(drag.minX), lx0, lx1), dx1 = clamp(px(drag.maxX), lx0, lx1)
+        let dy0 = clamp(px(drag.minY), ly0, ly1), dy1 = clamp(px(drag.maxY), ly0, ly1)
+        guard lx1 - lx0 >= 8, ly1 - ly0 >= 8, dx1 > dx0, dy1 > dy0 else { return nil }
+
+        let gap = max(4, px(12))     // khe hẹp hơn chừng này là chữ trong cùng 1 ô
+        let pad = max(2, px(8))      // lề quanh nội dung khi khe không có vách
+        let faint = Self.faintThreshold
+
+        // Đếm theo đúng thứ tự bộ nhớ (từng hàng một): dải đo có thể cỡ vài triệu pixel.
+        var cols = Projection(count: lx1 - lx0, across: dy1 - dy0)
+        for y in dy0..<dy1 {
+            let base = y * w + lx0
+            for i in 0..<cols.count {
+                let e = vEdge[base + i]
+                if e >= faint { cols.faint[i] += 1 }
+                if e >= thr { cols.strong[i] += 1 }
+            }
+        }
+        guard let x = cols.span(hit: dx0 - lx0, dx1 - lx0, gap: gap, pad: pad) else { return nil }
+
+        let sx0 = lx0 + x.outer.lowerBound, sx1 = lx0 + x.outer.upperBound
+        var rows = Projection(count: ly1 - ly0, across: sx1 - sx0)
+        for i in 0..<rows.count {
+            let base = (ly0 + i) * w
+            for x in sx0..<sx1 {
+                let e = hEdge[base + x]
+                if e >= faint { rows.faint[i] += 1 }
+                if e >= thr { rows.strong[i] += 1 }
+            }
+        }
+        guard let y = rows.span(hit: dy0 - ly0, dy1 - ly0, gap: gap, pad: pad) else { return nil }
+
+        return CGRect(x: pt(lx0 + x.inner.lowerBound), y: pt(ly0 + y.inner.lowerBound),
+                      width: pt(x.inner.count), height: pt(y.inner.count))
+    }
+
+    /// Biên đếm được dọc một trục: ở mỗi vị trí, trên `across` mẫu, bao nhiêu
+    /// mẫu là biên rõ (`strong`) và bao nhiêu chỉ cần nhạt (`faint`).
+    private struct Projection {
+        let count: Int
+        let across: Int
+        var strong: [Int]
+        var faint: [Int]
+
+        init(count: Int, across: Int) {
+            self.count = count
+            self.across = across
+            strong = [Int](repeating: 0, count: count)
+            faint = [Int](repeating: 0, count: count)
+        }
+
+        /// `inner` bao trọn các cụm mực mà đoạn kéo [a, b) chạm tới (kéo trọn
+        /// trong một khe thì lấy cụm gần tâm nhất), dính vào vách hoặc chừa
+        /// `pad`. `outer` nới tới giữa khe hai bên: đó là bề ngang của cả ô.
+        func span(hit a: Int, _ b: Int, gap: Int, pad: Int) -> (inner: Range<Int>, outer: Range<Int>)? {
+            let wallHits = max(1, across * 85 / 100)
+            let wall = faint.map { $0 >= wallHits }
+
+            // Cụm mực: mực cách nhau dưới `gap` và không có vách xen giữa thì gộp.
+            var clusters: [Range<Int>] = []
+            var lastWall = Int.min
+            for i in 0..<count {
+                if wall[i] { lastWall = i; continue }
+                guard strong[i] > 0 else { continue }
+                if let last = clusters.last, i - last.upperBound <= gap, lastWall < last.upperBound {
+                    clusters[clusters.count - 1] = last.lowerBound..<(i + 1)
+                } else {
+                    clusters.append(i..<(i + 1))
+                }
+            }
+            guard !clusters.isEmpty else { return nil }
+
+            var picked = clusters.indices.filter { clusters[$0].overlaps(a..<b) }
+            if picked.isEmpty {
+                let mid = (a + b) / 2
+                func distance(_ c: Range<Int>) -> Int {
+                    mid < c.lowerBound ? c.lowerBound - mid : mid >= c.upperBound ? mid - c.upperBound + 1 : 0
+                }
+                picked = [clusters.indices.min { distance(clusters[$0]) < distance(clusters[$1]) }!]
+            }
+            let first = clusters[picked.first!], last = clusters[picked.last!]
+            let before = picked.first! > 0 ? clusters[picked.first! - 1].upperBound : 0
+            let after = picked.last! + 1 < clusters.count ? clusters[picked.last! + 1].lowerBound : count
+
+            // Mép trước: vách gần nhất trong khe phía trước, lấy trọn cả vạch dày.
+            var lo = first.lowerBound - min(pad, (first.lowerBound - before) / 2)
+            var outerLo = before + (first.lowerBound - before) / 2
+            if var start = (before..<first.lowerBound).last(where: { wall[$0] }) {
+                while start > before, wall[start - 1] { start -= 1 }
+                lo = start
+                outerLo = start
+            }
+            // Mép sau: vạch 1px ở pixel c cho biên ở c và c+1, nên biên cuối của
+            // cụm vách là mép sau của vạch.
+            var hi = last.upperBound + min(pad, (after - last.upperBound) / 2)
+            var outerHi = last.upperBound + (after - last.upperBound) / 2
+            if var end = (last.upperBound..<after).first(where: { wall[$0] }) {
+                while end + 1 < after, wall[end + 1] { end += 1 }
+                hi = end
+                outerHi = end
+            }
+            guard hi > lo else { return nil }
+            return (lo..<hi, outerLo..<max(outerHi, outerLo + 1))
+        }
+    }
+
     /// Hộp bị 1 đường chạy gần hết bề ngang (hoặc dọc) cắt ngang khúc giữa, và
     /// đường đó đậm ngang ngửa chính viền hộp → CHỒNG nhiều item cùng loại (2
     /// dòng của 1 danh sách, 2 cột…), không phải 1 item. Đường cắt nhạt hơn hẳn
