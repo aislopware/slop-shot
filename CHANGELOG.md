@@ -4,6 +4,16 @@ Sinh từ commit log bằng [git-cliff](https://git-cliff.org). Mục nào nằm
 loại (type) của commit quyết định — tức quyết định lúc VIẾT commit, không phải lúc cắt
 release. Quy ước được `scripts/check-commit-msg.sh` chặn ngay ở hook commit-msg.
 
+## [0.11.0](https://github.com/aislopware/slop-shot/compare/v0.10.1...v0.11.0) — 2026-10-14
+
+### Features
+
+- Hold ⌘ while dragging to take whole table cells ([`8c64c85`](https://github.com/aislopware/slop-shot/commit/8c64c858df0b4b8157f598601df3ad8372ad0fa2))
+
+### Refactoring
+
+- Draw every control with zeron's components on gpui-base ([`ee1b946`](https://github.com/aislopware/slop-shot/commit/ee1b94671f0ffd8416e1ae0a50abb4500749c915))
+
 ## [0.10.1](https://github.com/aislopware/slop-shot/compare/v0.10.0...v0.10.1) — 2026-10-14
 
 ### Tests
