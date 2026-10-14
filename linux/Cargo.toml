@@ -10,8 +10,8 @@ authors = ["thanglb <thang.le@jmango360.com>"]
 
 [dependencies]
 # gpui-component pins the gpui-pre snapshot of Zed; gpui itself must match it exactly.
-gpui = { package = "gpui-pre", version = "=0.3.8" }
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.8", features = ["wayland", "x11"] }
+gpui = { package = "gpui-pre", version = "=0.3.9" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", features = ["wayland", "x11"] }
 gpui-component = { git = "https://github.com/aislopware/gpui-kit.git" }
 gpui-kit-assets = { git = "https://github.com/aislopware/gpui-kit.git" }
 ashpd = { version = "0.13", default-features = false, features = ["async-io", "screenshot", "open_uri", "screencast", "remote_desktop"] }
@@ -44,6 +44,11 @@ rqrr = "0.11"
 unicode-normalization = "0.1"
 env_logger = { version = "0.11", default-features = false, features = ["humantime"] }
 
+[dev-dependencies]
+# Headless rendering for src/render_tests.rs: the test platform's windows and the wgpu renderer.
+gpui = { package = "gpui-pre", version = "=0.3.9", features = ["test-support"] }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", features = ["wayland", "x11", "test-support"] }
+
 [profile.release]
 lto = "thin"
 strip = true
@@ -72,10 +77,10 @@ assets = [
 ]
 
 [patch.crates-io]
-gpui-pre = { git = "https://github.com/aislopware/gpui-fast.git", rev = "dc3602e3af56edb1dbbc9211856d4159c1aaff8f" }
-gpui-pre-platform = { git = "https://github.com/aislopware/gpui-fast.git", rev = "dc3602e3af56edb1dbbc9211856d4159c1aaff8f" }
-gpui-pre-macros = { git = "https://github.com/aislopware/gpui-fast.git", rev = "dc3602e3af56edb1dbbc9211856d4159c1aaff8f" }
-gpui-pre-sum-tree = { git = "https://github.com/aislopware/gpui-fast.git", rev = "dc3602e3af56edb1dbbc9211856d4159c1aaff8f" }
+gpui-pre = { git = "https://github.com/aislopware/gpui-fast.git", rev = "74664df64d50e21b63bae0b66f56457d6cbe3c5a" }
+gpui-pre-platform = { git = "https://github.com/aislopware/gpui-fast.git", rev = "74664df64d50e21b63bae0b66f56457d6cbe3c5a" }
+gpui-pre-macros = { git = "https://github.com/aislopware/gpui-fast.git", rev = "74664df64d50e21b63bae0b66f56457d6cbe3c5a" }
+gpui-pre-sum-tree = { git = "https://github.com/aislopware/gpui-fast.git", rev = "74664df64d50e21b63bae0b66f56457d6cbe3c5a" }
 
 [patch."https://github.com/aislopware/gpui-fast.git"]
 # Wayland/X11 image clipboard, per-output fullscreen, exact X11 popups; see vendor/gpui_linux/PATCHES.md.

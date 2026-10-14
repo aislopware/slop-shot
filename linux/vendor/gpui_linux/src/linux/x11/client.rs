@@ -819,6 +819,9 @@ impl X11Client {
         if !state.has_xim() {
             return;
         }
+        if !crate::fast::xim::is_handshake_complete(state.xim_handler.as_ref()) {
+            return;
+        }
 
         let Some((mut ximc, xim_handler)) = state.take_xim() else {
             return;
@@ -2686,6 +2689,10 @@ fn get_scale_factor(
     {
         let scale = dpi / 96.0; // base dpi
         log::info!("Using scale factor from Xft.dpi: {}", scale);
+        return scale;
+    }
+
+    if let Some(scale) = crate::fast::x11_scale::gdk_scale() {
         return scale;
     }
 
