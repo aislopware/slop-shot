@@ -4,6 +4,12 @@ Sinh từ commit log bằng [git-cliff](https://git-cliff.org). Mục nào nằm
 loại (type) của commit quyết định — tức quyết định lúc VIẾT commit, không phải lúc cắt
 release. Quy ước được `scripts/check-commit-msg.sh` chặn ngay ở hook commit-msg.
 
+## [0.11.1](https://github.com/aislopware/slop-shot/compare/v0.11.0...v0.11.1) — 2026-10-14
+
+### Bug fixes
+
+- ⌘-drag takes whole table rows, edge to edge ([`999774e`](https://github.com/aislopware/slop-shot/commit/999774e5637d891756d3860f959621ae12b56806))
+
 ## [0.11.0](https://github.com/aislopware/slop-shot/compare/v0.10.1...v0.11.0) — 2026-10-14
 
 ### Features
