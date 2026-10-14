@@ -215,10 +215,10 @@ def alerts_opened():
 
 
 def default_button(shot):
-    """Centre of the white default button of an alert, or None. Near-black on both sides is
-    what sets it apart from a white notification banner."""
+    """Centre of the light default button of an alert (the theme's #e8e8ea), or None.
+    Near-black on both sides is what sets it apart from a white notification banner."""
     rgb = shot[:, :, :3].astype(int)
-    white = (rgb >= 240).all(axis=2)
+    white = (rgb >= 224).all(axis=2)
     dark = (rgb <= 40).all(axis=2)
     rows = []
     for y in range(rgb.shape[0]):
@@ -771,7 +771,7 @@ def history(app, inp):
     time.sleep(1.5)
     portal_screenshot("60-history")
     seen = ocr_text(EVIDENCE / "60-history.png")
-    check("Recent captures" in seen, f"`slopshot history` opens Capture History ({seen[:120]!r})")
+    check("newest first" in seen, f"`slopshot history` opens Capture History ({seen[:120]!r})")
     kinds = [i.get("kind") for i in history_items()]
     log(f"history kinds: {kinds}")
 
