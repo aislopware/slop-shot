@@ -4,6 +4,16 @@ Sinh từ commit log bằng [git-cliff](https://git-cliff.org). Mục nào nằm
 loại (type) của commit quyết định — tức quyết định lúc VIẾT commit, không phải lúc cắt
 release. Quy ước được `scripts/check-commit-msg.sh` chặn ngay ở hook commit-msg.
 
+## [0.10.0](https://github.com/aislopware/slop-shot/compare/v0.9.9...v0.10.0) — 2026-10-14
+
+### Features
+
+- Restyle the interface after zeron ([`56c93b7`](https://github.com/aislopware/slop-shot/commit/56c93b72cba258c380e84c80a61e3113b9471353))
+
+### Tooling
+
+- Update gpui-kit to bb14d3c and gpui-fast to 74664df ([`f56d884`](https://github.com/aislopware/slop-shot/commit/f56d8848e7cca3bee3c8cd68e1c0b4a04d3f4f82))
+
 ## [0.9.9](https://github.com/aislopware/slop-shot/compare/v0.9.8...v0.9.9) — 2026-10-13
 
 ### Bug fixes
