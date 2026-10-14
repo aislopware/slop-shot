@@ -172,7 +172,7 @@ struct SelectionOverlay: View {
 
     private var hintSubtitle: String {
         model.snapEnabled
-            ? "click a highlighted area  ·  scroll to grow / shrink it  ·  ⌥ free select  ·  ⇧ square  ·  ⌘ whole table cells  ·  hold space to move  ·  F full screen  ·  esc to cancel"
+            ? "click a highlighted area  ·  scroll to grow / shrink it  ·  ⌥ free select  ·  ⇧ square  ·  ⌘ whole table rows  ·  hold space to move  ·  F full screen  ·  esc to cancel"
             : "⇧ square  ·  hold space to move  ·  F full screen  ·  esc to cancel"
     }
 
@@ -385,7 +385,7 @@ final class SelectionEventView: NSView {
     private var startPoint: NSPoint?
     private var freeMode = false            // giữ ⌥ = tắt bắt dính
     private var squareMode = false          // giữ ⇧ lúc kéo = khung vuông
-    private var cellMode = false            // giữ ⌘ lúc kéo = thả ra thì bung trọn các ô bảng
+    private var cellMode = false            // giữ ⌘ lúc kéo = thả ra thì bung trọn các dòng bảng
     private var spaceMove = false           // giữ Space lúc kéo = dời cả khung đang kéo
     private var lastDragPoint: CGPoint?
 
@@ -635,7 +635,7 @@ final class SelectionEventView: NSView {
         return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
     }
 
-    /// Bung khung kéo ra trọn các cột và dòng bảng mà nó chạm tới, trong cửa
+    /// Bung khung kéo ra trọn các dòng bảng mà nó chạm tới, trong cửa
     /// sổ chứa tâm khung. Chưa có ảnh để dò (hoặc không thấy bảng) thì giữ nguyên.
     private func tableCells(_ r: CGRect) -> CGRect {
         let limit = windows.window(at: CGPoint(x: r.midX, y: r.midY)) ?? bounds
@@ -777,7 +777,7 @@ final class SelectionEventView: NSView {
 
     // Chuẩn hoá để kéo theo hướng nào cũng ra rect dương, rồi cho bắt dính.
     // Giữ ⇧ = khung vuông (cạnh dài hơn quyết định), không bắt dính vì hút
-    // cạnh sẽ làm méo tỉ lệ. Giữ ⌘ cũng không hút: khung bung ra theo ô bảng
+    // cạnh sẽ làm méo tỉ lệ. Giữ ⌘ cũng không hút: khung bung ra theo dòng bảng
     // lúc thả, hút cạnh giữa chừng chỉ làm khung giật.
     private func rect(from start: NSPoint, to p: CGPoint) -> CGRect {
         var end = p

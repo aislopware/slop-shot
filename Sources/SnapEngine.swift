@@ -547,7 +547,7 @@ final class SnapEngine: @unchecked Sendable {
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    // C. GỘP Ô BẢNG — kéo (giữ ⌘) qua vài ô, thả ra thì bung trọn các cột/dòng
+    // C. GỘP DÒNG BẢNG — kéo (giữ ⌘) qua vài ô, thả ra thì bung trọn các dòng
     // ═════════════════════════════════════════════════════════════════════
 
     /// Biên nhạt nhất vẫn tính là một VẠCH kẻ: vạch kẻ dòng của bảng web hay
@@ -555,7 +555,7 @@ final class SnapEngine: @unchecked Sendable {
     /// còn phải chạy suốt bề ngang đo — chữ hay viền pill thì không.
     private static let faintThreshold: UInt8 = 6
 
-    /// Khung trọn các cột và dòng mà `drag` chạm tới, trong `limit`.
+    /// Khung trọn các dòng bảng mà `drag` chạm tới, trong `limit`.
     ///
     /// Bảng thường không kẻ đường dọc giữa các cột, nên cột được dò từ NỘI DUNG:
     /// chiếu biên dọc của dải hàng đang kéo xuống trục x, cụm mực nào cách nhau
@@ -563,6 +563,10 @@ final class SnapEngine: @unchecked Sendable {
     /// giữa khe bên này tới giữa khe bên kia của các cột đó. Vạch chạy suốt bề
     /// ngang đo (viền bảng, vạch kẻ dòng) là VÁCH: cạnh khung dính vào vách,
     /// khe không có vách thì chừa một lề nhỏ quanh nội dung.
+    ///
+    /// Vạch kẻ dòng chạy suốt bảng, nên hai đầu mút của nó là hai mép bảng: dòng
+    /// được lấy trọn tới đó dù kéo chỉ qua một cột. Bảng không kẻ dòng thì không
+    /// có gì báo mép bảng, đành giữ các cột đã chạm.
     func cells(covering drag: CGRect, within limit: CGRect) -> CGRect? {
         let lx0 = clamp(px(limit.minX), 1, w - 1), lx1 = clamp(px(limit.maxX), 1, w)
         let ly0 = clamp(px(limit.minY), 1, h - 1), ly1 = clamp(px(limit.maxY), 1, h)
@@ -598,8 +602,33 @@ final class SnapEngine: @unchecked Sendable {
         }
         guard let y = rows.span(hit: dy0 - ly0, dy1 - ly0, gap: gap, pad: pad) else { return nil }
 
-        return CGRect(x: pt(lx0 + x.inner.lowerBound), y: pt(ly0 + y.inner.lowerBound),
-                      width: pt(x.inner.count), height: pt(y.inner.count))
+        var x0 = lx0 + x.inner.lowerBound, x1 = lx0 + x.inner.upperBound
+        let rules = (y.inner.lowerBound...min(y.inner.upperBound, rows.count - 1)).filter(rows.isWall)
+        if !rules.isEmpty {
+            let ends = rules.map { ruleEnds(at: ly0 + $0, through: sx0..<sx1, within: lx0..<lx1) }
+            x0 = ends.map(\.lowerBound).min()!
+            x1 = ends.map(\.upperBound).max()!
+        }
+        return CGRect(x: pt(x0), y: pt(ly0 + y.inner.lowerBound),
+                      width: pt(x1 - x0), height: pt(y.inner.count))
+    }
+
+    /// Hai đầu mút của vạch ngang ở biên `y`, biết nó chạy qua `seen`: lần ra
+    /// hai bên tới khi vạch đứt quá vài pixel.
+    private func ruleEnds(at y: Int, through seen: Range<Int>, within limit: Range<Int>) -> Range<Int> {
+        let gap = max(2, px(3)), faint = Self.faintThreshold, row = y * w
+        var lo = seen.lowerBound, x = lo - 1, miss = 0
+        while x >= limit.lowerBound, miss <= gap {
+            if hEdge[row + x] >= faint { lo = x; miss = 0 } else { miss += 1 }
+            x -= 1
+        }
+        var hi = seen.upperBound
+        x = hi; miss = 0
+        while x < limit.upperBound, miss <= gap {
+            if hEdge[row + x] >= faint { hi = x + 1; miss = 0 } else { miss += 1 }
+            x += 1
+        }
+        return lo..<hi
     }
 
     /// Biên đếm được dọc một trục: ở mỗi vị trí, trên `across` mẫu, bao nhiêu
@@ -617,12 +646,14 @@ final class SnapEngine: @unchecked Sendable {
             faint = [Int](repeating: 0, count: count)
         }
 
+        /// Vạch chạy gần suốt bề ngang đo.
+        func isWall(_ i: Int) -> Bool { faint[i] >= max(1, across * 85 / 100) }
+
         /// `inner` bao trọn các cụm mực mà đoạn kéo [a, b) chạm tới (kéo trọn
         /// trong một khe thì lấy cụm gần tâm nhất), dính vào vách hoặc chừa
         /// `pad`. `outer` nới tới giữa khe hai bên: đó là bề ngang của cả ô.
         func span(hit a: Int, _ b: Int, gap: Int, pad: Int) -> (inner: Range<Int>, outer: Range<Int>)? {
-            let wallHits = max(1, across * 85 / 100)
-            let wall = faint.map { $0 >= wallHits }
+            let wall = (0..<count).map(isWall)
 
             // Cụm mực: mực cách nhau dưới `gap` và không có vách xen giữa thì gộp.
             var clusters: [Range<Int>] = []

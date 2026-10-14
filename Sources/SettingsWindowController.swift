@@ -122,7 +122,7 @@ private struct CaptureTab: View {
         Form {
             Section("Selection") {
                 Toggle("Snap to window & item edges", isOn: $settings.snapToEdges)
-                Text("Hover to outline the window or item under the cursor, then click to grab it. Hold ⌥ while dragging for a free selection, or ⌘ to take whole table cells.")
+                Text("Hover to outline the window or item under the cursor, then click to grab it. Hold ⌥ while dragging for a free selection, or ⌘ to take whole table rows.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
