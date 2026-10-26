@@ -1369,7 +1369,7 @@ impl Render for OverlayView {
         match mode {
             Mode::Area => {
                 if let Some(inl) = inline {
-                    root = root.child(inline_editor(inl, sw, sh, cx));
+                    root = root.child(inline_editor(&self.session, inl, sw, sh, cx));
                 }
                 let (title, subtitle) = if snap_setting {
                     (
@@ -1626,7 +1626,7 @@ fn action_bar(session: &Entity<Session>, r: R, sw: f32, sh: f32, alpha: f32, cx:
 }
 
 /// The board laid exactly over the selection, with its floating toolbar.
-fn inline_editor(inl: &Inline, sw: f32, sh: f32, cx: &App) -> AnyElement {
+fn inline_editor(session: &Entity<Session>, inl: &Inline, sw: f32, sh: f32, cx: &App) -> AnyElement {
     let r = inl.rect;
     let board_entity = inl.board.clone();
     let b = board_entity.read(cx);
@@ -1634,25 +1634,23 @@ fn inline_editor(inl: &Inline, sw: f32, sh: f32, cx: &App) -> AnyElement {
     let bar_cell = inl.bar.clone();
 
     let session_actions = {
-        let board = board_entity.clone();
         let cancel_b = board::hud_button("inline-cancel", "Cancel (esc)", {
-            let board = board.clone();
-            move |_, window, cx| {
-                let _ = &board;
-                window.dispatch_keystroke(gpui::Keystroke::parse("escape").unwrap(), cx);
-            }
+            let session = session.clone();
+            move |_, _, cx| cancel(&session, cx)
         })
         .w(px(30.))
         .h(px(28.))
         .child(board::icon(icons::CLOSE, 13., gpui::hsla(0., 0., 0.85, 1.)));
-        let save_b = board::hud_button("inline-save", "Save (Ctrl+S)", move |_, window, cx| {
-            window.dispatch_keystroke(gpui::Keystroke::parse("ctrl-s").unwrap(), cx);
+        let save_b = board::hud_button("inline-save", "Save (Ctrl+S)", {
+            let session = session.clone();
+            move |_, window, cx| finish_inline(&session, true, window, cx)
         })
         .w(px(30.))
         .h(px(28.))
         .child(board::icon(icons::DOWNLOAD_MINIMALISTIC, 13., gpui::hsla(0., 0., 0.85, 1.)));
-        let copy_b = board::tinted_button("inline-copy", "Copy and close (Ctrl+C or ↩)", accent().opacity(0.85), move |_, window, cx| {
-            window.dispatch_keystroke(gpui::Keystroke::parse("ctrl-c").unwrap(), cx);
+        let copy_b = board::tinted_button("inline-copy", "Copy and close (Ctrl+C or ↩)", accent().opacity(0.85), {
+            let session = session.clone();
+            move |_, window, cx| finish_inline(&session, false, window, cx)
         })
         .h(px(28.))
         .px(px(10.))
