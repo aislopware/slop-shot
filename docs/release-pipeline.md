@@ -125,8 +125,8 @@ trong vài giây thay vì sau một bản build đã ký.
 Ra `dist/SlopShot-<version>-universal.dmg` và `dist/SHA256SUMS`.
 
 Cert: `Developer ID Application: JMANGO VIETNAM OPERATIONS COMPANY LIMITED (UK58J62H8L)`,
-credential `e9752244-44cc-4a8a-bfbb-8206b66046bc` trong vault (`SLOPSHOT_CERTIFICATE_ID` để đổi).
-Notarize bằng ASC key "JMango Vietnam", credential `6a08f315-e27f-4a77-a467-b6ece092527b`
+credential `30f5e960-5a8c-4d90-972c-b9137126f3ec` trong vault (`SLOPSHOT_CERTIFICATE_ID` để đổi).
+Notarize bằng ASC key "JMango Vietnam", credential `64547ded-03b1-43a8-8405-22f7cfab816c`
 (`SLOPSHOT_ASC_KEY_ID` để đổi) — phải chỉ rõ, vì vault có nhiều key và ở `--non-interactive` CLI
 không tự chọn.
 Đổi Team ID so với các bản đến 0.9.1 (WEEBUILD, `AJ4R8GWM7A`) nghĩa là macOS coi đây là app khác
