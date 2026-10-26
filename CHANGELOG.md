@@ -4,6 +4,13 @@ Sinh từ commit log bằng [git-cliff](https://git-cliff.org). Mục nào nằm
 loại (type) của commit quyết định — tức quyết định lúc VIẾT commit, không phải lúc cắt
 release. Quy ước được `scripts/check-commit-msg.sh` chặn ngay ở hook commit-msg.
 
+## [0.11.2](https://github.com/aislopware/slop-shot/compare/v0.11.1...v0.11.2) — 2026-10-26
+
+### Bug fixes
+
+- Let inline Copy and Save work while text is being typed ([`8cb053d`](https://github.com/aislopware/slop-shot/commit/8cb053db47d835ba94d61b3b7b5ed2f722ef4e49))
+- Keep annotations as big as on a Mac-wide screen at most ([`0203412`](https://github.com/aislopware/slop-shot/commit/02034122870203d78389427d11f8e0bc3d649f69))
+
 ## [0.11.1](https://github.com/aislopware/slop-shot/compare/v0.11.0...v0.11.1) — 2026-10-14
 
 ### Bug fixes
