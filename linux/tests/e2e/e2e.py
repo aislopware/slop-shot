@@ -265,9 +265,11 @@ def overlay_left(name):
     (the card sits bottom left) must show the wallpaper as is. Returns the differences."""
     shot = portal_screenshot(name)[:, :, :3].astype(int)
     wall = load_png(HOME / "wallpaper.png")[:, :, :3].astype(int)
-    spots = [(400, 15), (785, 1265)]
-    return [(spot, shot[spot].tolist(), wall[spot].tolist()) for spot in spots
-            if np.abs(shot[spot] - wall[spot]).max() > 12]
+    # The wallpaper is stretched over monitors of other sizes; its gradient stays smooth.
+    (sh, sw), (wh, ww) = shot.shape[:2], wall.shape[:2]
+    spots = [((400, 15), (400 * sh // wh, 15 * sw // ww)), ((785, 1265), (785 * sh // wh, 1265 * sw // ww))]
+    return [(at, shot[at].tolist(), wall[spot].tolist()) for spot, at in spots
+            if np.abs(shot[at] - wall[spot]).max() > 12]
 
 
 def clipboard(mime):
@@ -833,7 +835,80 @@ def hover(app, inp):
     return app
 
 
-FEATURES = {"hover": hover, "record": record, "scroll": scrolling, "text": capture_text, "history": history}
+def find_copy_button(shot):
+    """The centre of the inline toolbar's Copy button: the only accent-filled control."""
+    rgb = shot[:, :, :3].astype(int)
+    accent = (np.abs(rgb[:, :, 0] - 124) < 20) & (np.abs(rgb[:, :, 1] - 134) < 20) & (rgb[:, :, 2] > 235)
+    ys, xs = np.nonzero(accent)
+    return (int(xs.mean()), int(ys.mean())) if len(xs) > 50 else None
+
+
+def inline_tools(app, inp):
+    app.stop()
+    data = settings()
+    data["edit_after_select"] = True
+    SETTINGS.write_text(json.dumps(data))
+    app = App()
+    time.sleep(2)
+
+    # ── Copy works while a text box is still being typed in ──
+    want_area = portal_screenshot("80-desktop")[100:400, 100:500, :3].astype(int)
+    temp_before = files(TEMP_DIR)
+    if not select_area(inp, "area"):
+        return app
+    button = wait_for(lambda: find_copy_button(portal_screenshot("80-inline-editor")), 5, 0.3)
+    if not check(button is not None, "the inline toolbar shows Copy"):
+        return app
+    inp.click(315, button[1])  # the Text tool, under the 400 pt wide selection
+    time.sleep(0.3)
+    check(settings().get("editor_tool") == "text", f"the Text tool is picked ({settings().get('editor_tool')})")
+    inp.click(160, 200)
+    time.sleep(0.3)
+    for ch in "hello":
+        inp.keys(ch)
+    time.sleep(0.3)
+    portal_screenshot("80-inline-typing")
+    if True:
+        inp.click(*button)
+        temp = wait_new_file(TEMP_DIR, temp_before)
+        check(temp is not None, "clicking Copy while typing copies without pressing Return first")
+        time.sleep(1)
+        check(not overlay_left("81-after-copy"), "Copy while typing closes the overlay")
+        types, pasted = clipboard_image("82-inline-text-clipboard.png")
+        if check(pasted is not None and pasted.shape[:2] == (300, 400), "the typed-on capture is on the clipboard"):
+            changed = np.abs(pasted[:, :, :3].astype(int) - want_area).max(axis=2) > 8
+            ys, xs = np.nonzero(changed)
+            box = (xs.min(), ys.min(), xs.max(), ys.max()) if len(xs) else None
+            check(len(xs) > 30 and 55 <= box[0] and box[2] < 200 and 95 <= box[1] and box[3] < 135,
+                  f"the text being typed, and only it, is in the copied image ({len(xs)} pixels in {box})")
+
+    # ── Stroke size follows the screen in points, up to a Mac-wide 1440 pt ──
+    opened = overlays_opened()
+    slopshot("area")
+    if not check(wait_overlay_opened(opened), "the overlay opens for a full-screen edit"):
+        return app
+    w, h = portal_screenshot("83-screen").shape[1::-1]
+    inp.move(w // 2, h // 2, steps=5)
+    inp.keys("f")
+    time.sleep(0.5)
+    inp.keys("l")
+    inp.drag(int(w * 0.3), h // 2, int(w * 0.7), h // 2)
+    time.sleep(0.3)
+    portal_screenshot("84-full-line")
+    inp.keys("a")  # leave Arrow as the remembered tool
+    inp.keys("return")
+    time.sleep(1.5)
+    types, pasted = clipboard_image("85-full-line-clipboard.png")
+    if check(pasted is not None and pasted.shape[:2] == (h, w), f"the full-screen edit copies {w}x{h}"):
+        column = pasted[h // 2 - 40:h // 2 + 40, w // 2, :3].astype(int)
+        thick = int(((column[:, 0] > 200) & (column[:, 1] < 120) & (column[:, 2] < 120)).sum())
+        want = 0.005 * min(w, 1440)
+        check(abs(thick - want) <= 2, f"a Normal line on a {w} pt screen is ~{want:.1f} px thick ({thick})")
+    return app
+
+
+FEATURES = {"hover": hover, "record": record, "scroll": scrolling, "text": capture_text, "history": history,
+            "inline": inline_tools}
 
 
 if __name__ == "__main__":

@@ -258,11 +258,24 @@ impl Annotation {
     }
 }
 
+/// A narrow inline selection sizes strokes and text as if it were this many points wide.
+pub const INLINE_MIN_PT: f32 = 900.;
+/// The widest canvas sizes still grow with: about a Mac screen. A Linux desktop at 100%
+/// is 1920 or 2560 pt wide, and full-width text and arrows came out far bigger than the
+/// UI text around them.
+const MAX_PT: f32 = 1440.;
+
+/// `Metrics::unit` for a canvas `width_pt` points wide.
+pub fn unit(width_pt: f32, min_pt: f32) -> f32 {
+    let w = width_pt.max(1.);
+    w.clamp(min_pt, MAX_PT.max(min_pt)) / w
+}
+
 /// How sizes on the canvas relate to image pixels.
 #[derive(Clone, Copy, Debug)]
 pub struct Metrics {
     pub image_w: f32,
-    /// The inline editor sizes strokes and text as if the canvas were ~900 pt wide.
+    /// Nominal width over image width; see `unit`.
     pub unit: f32,
     /// Image pixels per screen point, for tolerances given in points.
     pub pt: f32,

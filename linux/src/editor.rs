@@ -14,7 +14,7 @@ use crate::board::{self, Board};
 use crate::settings::Settings;
 use crate::theme::{self, Theme};
 use crate::widgets::{self, ActionTone};
-use crate::{alert, chrome, flow, icons, motion, output, ui};
+use crate::{alert, annotate, chrome, flow, icons, motion, output, ui};
 
 const TOP_BAR: f32 = 50.;
 const BOTTOM_BAR: f32 = 40.;
@@ -85,7 +85,9 @@ impl Editor {
     pub(crate) fn new(image: RgbaImage, source: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
-        let board = cx.new(|cx| Board::new(image, 1., focus.clone(), cx));
+        // The image is most likely a capture of this screen, at its scale.
+        let unit = annotate::unit(image.width() as f32 / window.scale_factor(), 0.);
+        let board = cx.new(|cx| Board::new(image, unit, focus.clone(), cx));
         let sub = cx.observe(&board, |_, _, cx| cx.notify());
         let area = Rc::new(Cell::new(size(px(1040.), px(740. - TOP_BAR - BOTTOM_BAR))));
         Self { board, source, zoom: 1., area, focus, _board: sub }

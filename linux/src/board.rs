@@ -98,7 +98,7 @@ pub struct Board {
     selected: Option<u64>,
     editing: Option<Editing>,
     press: Option<Press>,
-    /// Stroke, text and counter size scale; 1 in the editor window.
+    /// Stroke, text and counter size scale (`annotate::unit`).
     pub unit: f32,
     pub status: SharedString,
     /// The first Escape with annotations only arms; the second closes.

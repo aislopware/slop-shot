@@ -23,7 +23,7 @@ use crate::board::{self, Board};
 use crate::preview::{accent, black, hud, to_render_image, white};
 use crate::settings::Settings;
 use crate::snap::{RectF, SnapEngine};
-use crate::{alert, flow, output};
+use crate::{alert, annotate, flow, output};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mode {
@@ -935,7 +935,7 @@ fn start_inline(session: &Entity<Session>, display: usize, rect: R, cx: &mut App
         (s.crop(display, rect), s.displays[display].focus.clone(), others)
     };
     let Some(focus) = focus else { return };
-    let unit = (900. / rect.w.max(1.)).max(1.);
+    let unit = annotate::unit(rect.w, annotate::INLINE_MIN_PT);
     let board = cx.new(|cx| Board::new(crop, unit, focus, cx));
     session.update(cx, |s, cx| {
         cx.observe(&board, |_, _, cx| cx.notify()).detach();
