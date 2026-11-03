@@ -172,7 +172,7 @@ struct SelectionOverlay: View {
 
     private var hintSubtitle: String {
         model.snapEnabled
-            ? "click a highlighted area  ·  scroll to grow / shrink it  ·  ⌥ free select  ·  ⇧ square  ·  ⌘ whole table rows  ·  hold space to move  ·  F full screen  ·  esc to cancel"
+            ? "click a highlighted area  ·  scroll to grow / shrink it  ·  ⌥ free select  ·  ⇧ square  ·  ⌘ whole table rows / cells  ·  hold space to move  ·  F full screen  ·  esc to cancel"
             : "⇧ square  ·  hold space to move  ·  F full screen  ·  esc to cancel"
     }
 

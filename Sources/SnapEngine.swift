@@ -567,6 +567,9 @@ final class SnapEngine: @unchecked Sendable {
     /// Vạch kẻ dòng chạy suốt bảng, nên hai đầu mút của nó là hai mép bảng: dòng
     /// được lấy trọn tới đó dù kéo chỉ qua một cột. Bảng không kẻ dòng thì không
     /// có gì báo mép bảng, đành giữ các cột đã chạm.
+    ///
+    /// Lưới kẻ đủ vạch cả hai chiều (ma trận 2×2, bảng kẻ ô) thì đi đường khác,
+    /// xem `ruledCells`.
     func cells(covering drag: CGRect, within limit: CGRect) -> CGRect? {
         let lx0 = clamp(px(limit.minX), 1, w - 1), lx1 = clamp(px(limit.maxX), 1, w)
         let ly0 = clamp(px(limit.minY), 1, h - 1), ly1 = clamp(px(limit.maxY), 1, h)
@@ -576,30 +579,15 @@ final class SnapEngine: @unchecked Sendable {
 
         let gap = max(4, px(12))     // khe hẹp hơn chừng này là chữ trong cùng 1 ô
         let pad = max(2, px(8))      // lề quanh nội dung khi khe không có vách
-        let faint = Self.faintThreshold
 
-        // Đếm theo đúng thứ tự bộ nhớ (từng hàng một): dải đo có thể cỡ vài triệu pixel.
-        var cols = Projection(count: lx1 - lx0, across: dy1 - dy0)
-        for y in dy0..<dy1 {
-            let base = y * w + lx0
-            for i in 0..<cols.count {
-                let e = vEdge[base + i]
-                if e >= faint { cols.faint[i] += 1 }
-                if e >= thr { cols.strong[i] += 1 }
-            }
+        let cols = columnProjection(lx0..<lx1, rows: dy0..<dy1)
+        if let grid = ruledCells(drag: dx0..<dx1, dy0..<dy1, cols: cols, within: lx0..<lx1, ly0..<ly1) {
+            return grid
         }
         guard let x = cols.span(hit: dx0 - lx0, dx1 - lx0, gap: gap, pad: pad) else { return nil }
 
         let sx0 = lx0 + x.outer.lowerBound, sx1 = lx0 + x.outer.upperBound
-        var rows = Projection(count: ly1 - ly0, across: sx1 - sx0)
-        for i in 0..<rows.count {
-            let base = (ly0 + i) * w
-            for x in sx0..<sx1 {
-                let e = hEdge[base + x]
-                if e >= faint { rows.faint[i] += 1 }
-                if e >= thr { rows.strong[i] += 1 }
-            }
-        }
+        let rows = rowProjection(ly0..<ly1, cols: sx0..<sx1)
         guard let y = rows.span(hit: dy0 - ly0, dy1 - ly0, gap: gap, pad: pad) else { return nil }
 
         var x0 = lx0 + x.inner.lowerBound, x1 = lx0 + x.inner.upperBound
@@ -611,6 +599,106 @@ final class SnapEngine: @unchecked Sendable {
         }
         return CGRect(x: pt(x0), y: pt(ly0 + y.inner.lowerBound),
                       width: pt(x1 - x0), height: pt(y.inner.count))
+    }
+
+    /// Lưới kẻ vạch: khung là trọn các ô mà đoạn kéo chạm, mép dính vào vạch.
+    ///
+    /// Trong lưới có vạch, ô là phần giữa hai vạch chứ không phải cụm chữ: ô của
+    /// ma trận 2×2 thưa chữ, rải rác, dò theo khe trắng chỉ ra một dải chữ.
+    /// Vạch cũng tự báo mép lưới nên không cần lần theo đầu mút như bảng chỉ kẻ
+    /// dòng (lần thế thì kéo dọc 2 ô lại ra cả 4).
+    ///
+    /// Chỉ nhận khi đoạn kéo băng qua ít nhất 1 vạch bên trong khối: một hộp có
+    /// viền mà trong không kẻ (bảng đóng khung, dòng cách nhau bằng khe trắng)
+    /// thì kéo qua vài dòng vẫn phải ra vài dòng, không phải cả hộp.
+    private func ruledCells(drag dx: Range<Int>, _ dy: Range<Int>, cols: Projection,
+                            within lx: Range<Int>, _ ly: Range<Int>) -> CGRect? {
+        let vWalls = cols.walls()
+        guard let left = vWalls.last(where: { $0.lowerBound <= dx.lowerBound - lx.lowerBound }),
+              let right = vWalls.first(where: { $0.upperBound >= dx.upperBound - 1 - lx.lowerBound
+                                                && $0.lowerBound > left.upperBound })
+        else { return nil }
+        let x0 = lx.lowerBound + left.lowerBound, x1 = lx.lowerBound + right.upperBound
+
+        let hWalls = rowProjection(ly, cols: x0..<x1).walls()
+        guard let top = hWalls.last(where: { $0.lowerBound <= dy.lowerBound - ly.lowerBound }),
+              let bottom = hWalls.first(where: { $0.upperBound >= dy.upperBound - 1 - ly.lowerBound
+                                                 && $0.lowerBound > top.upperBound })
+        else { return nil }
+        let y0 = ly.lowerBound + top.lowerBound, y1 = ly.lowerBound + bottom.upperBound
+
+        // Vạch dọc mới chỉ được đo trên dải hàng đang kéo; phải chạy suốt khối mới là vạch lưới.
+        func isColumnRule(_ run: ClosedRange<Int>) -> Bool {
+            let need = max(1, (y1 - y0) * 85 / 100)
+            return run.contains { i in
+                let x = lx.lowerBound + i
+                return (y0..<y1).count { vEdge[$0 * w + x] >= Self.faintThreshold } >= need
+            }
+        }
+        guard isColumnRule(left), isColumnRule(right) else { return nil }
+        let crossesRow = hWalls.contains { $0.lowerBound > top.upperBound && $0.upperBound < bottom.lowerBound }
+        let crossesColumn = vWalls.contains {
+            $0.lowerBound > left.upperBound && $0.upperBound < right.lowerBound && isColumnRule($0)
+        }
+        guard crossesRow || crossesColumn || continuesPastCorner(x0: x0, left, x1: x1, right, y0: y0, top, y1: y1, bottom,
+                                                                 within: lx, ly)
+        else { return nil }
+        return CGRect(x: pt(x0), y: pt(y0), width: pt(x1 - x0), height: pt(y1 - y0))
+    }
+
+    /// Một cạnh của khối chạy tiếp qua góc (ngã ba vạch) thì khối là 1 ô trong
+    /// lưới, có ô kề chung vạch đó; viền hộp đóng khung thì dừng ngay ở góc.
+    private func continuesPastCorner(x0: Int, _ left: ClosedRange<Int>, x1: Int, _ right: ClosedRange<Int>,
+                                     y0: Int, _ top: ClosedRange<Int>, y1: Int, _ bottom: ClosedRange<Int>,
+                                     within lx: Range<Int>, _ ly: Range<Int>) -> Bool {
+        let reach = max(8, px(16)), need = reach * 85 / 100
+        let faint = Self.faintThreshold
+        func column(_ run: ClosedRange<Int>, _ ys: Range<Int>) -> Bool {
+            ys.lowerBound >= ly.lowerBound && ys.upperBound <= ly.upperBound && run.contains { i in
+                let x = lx.lowerBound + i
+                return ys.count { vEdge[$0 * w + x] >= faint } >= need
+            }
+        }
+        func row(_ run: ClosedRange<Int>, _ xs: Range<Int>) -> Bool {
+            xs.lowerBound >= lx.lowerBound && xs.upperBound <= lx.upperBound && run.contains { i in
+                let base = (ly.lowerBound + i) * w
+                return xs.count { hEdge[base + $0] >= faint } >= need
+            }
+        }
+        // Đo từ ngoài mép vạch vuông góc, kẻo tính nhầm chính bề dày vạch đó.
+        let above = (y0 - reach)..<y0, below = (y1 + 1)..<(y1 + 1 + reach)
+        let before = (x0 - reach)..<x0, after = (x1 + 1)..<(x1 + 1 + reach)
+        return column(left, above) || column(left, below) || column(right, above) || column(right, below)
+            || row(top, before) || row(top, after) || row(bottom, before) || row(bottom, after)
+    }
+
+    /// Biên dọc ở mỗi cột trong `range`, đếm trên các hàng `rows`. Đếm theo đúng
+    /// thứ tự bộ nhớ (từng hàng một): dải đo có thể cỡ vài triệu pixel.
+    private func columnProjection(_ range: Range<Int>, rows: Range<Int>) -> Projection {
+        var p = Projection(count: range.count, across: rows.count)
+        for y in rows {
+            let base = y * w + range.lowerBound
+            for i in 0..<p.count {
+                let e = vEdge[base + i]
+                if e >= Self.faintThreshold { p.faint[i] += 1 }
+                if e >= thr { p.strong[i] += 1 }
+            }
+        }
+        return p
+    }
+
+    /// Biên ngang ở mỗi hàng trong `range`, đếm trên các cột `cols`.
+    private func rowProjection(_ range: Range<Int>, cols: Range<Int>) -> Projection {
+        var p = Projection(count: range.count, across: cols.count)
+        for i in 0..<p.count {
+            let base = (range.lowerBound + i) * w
+            for x in cols {
+                let e = hEdge[base + x]
+                if e >= Self.faintThreshold { p.faint[i] += 1 }
+                if e >= thr { p.strong[i] += 1 }
+            }
+        }
+        return p
     }
 
     /// Hai đầu mút của vạch ngang ở biên `y`, biết nó chạy qua `seen`: lần ra
@@ -648,6 +736,19 @@ final class SnapEngine: @unchecked Sendable {
 
         /// Vạch chạy gần suốt bề ngang đo.
         func isWall(_ i: Int) -> Bool { faint[i] >= max(1, across * 85 / 100) }
+
+        /// Các vạch, vạch dày vài px gộp thành 1 cụm.
+        func walls() -> [ClosedRange<Int>] {
+            var runs: [ClosedRange<Int>] = []
+            for i in 0..<count where isWall(i) {
+                if let last = runs.last, last.upperBound == i - 1 {
+                    runs[runs.count - 1] = last.lowerBound...i
+                } else {
+                    runs.append(i...i)
+                }
+            }
+            return runs
+        }
 
         /// `inner` bao trọn các cụm mực mà đoạn kéo [a, b) chạm tới (kéo trọn
         /// trong một khe thì lấy cụm gần tâm nhất), dính vào vách hoặc chừa
