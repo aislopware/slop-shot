@@ -4,6 +4,16 @@ Sinh từ commit log bằng [git-cliff](https://git-cliff.org). Mục nào nằm
 loại (type) của commit quyết định — tức quyết định lúc VIẾT commit, không phải lúc cắt
 release. Quy ước được `scripts/check-commit-msg.sh` chặn ngay ở hook commit-msg.
 
+## [0.11.3](https://github.com/aislopware/slop-shot/compare/v0.11.2...v0.11.3) — 2026-11-03
+
+### Bug fixes
+
+- ⌘-drag over a ruled grid takes the cells it touches ([`fc399fc`](https://github.com/aislopware/slop-shot/commit/fc399fc0258448edfe9504fcc7b31b6b1a6b3f8f))
+
+### Tooling
+
+- Sign with the Developer ID and ASC key now in the vault ([`105f8f1`](https://github.com/aislopware/slop-shot/commit/105f8f1fe97a61f4135ab41d8df933f75ae518bd))
+
 ## [0.11.2](https://github.com/aislopware/slop-shot/compare/v0.11.1...v0.11.2) — 2026-10-26
 
 ### Bug fixes
