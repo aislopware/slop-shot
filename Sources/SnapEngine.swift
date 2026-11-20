@@ -294,11 +294,13 @@ final class SnapEngine: @unchecked Sendable {
             guard bestLen > 0 else { i += step; continue }
             // Viền dày / viền kép chiếm vài px liền nhau: chỉ lấy 1 đường cho cả
             // cụm, và lấy đường DÀI nhất — đường đầu tiên gặp có thể chỉ là 1
-            // mẩu ngắn sát bên mép thật.
+            // mẩu ngắn sát bên mép thật. Dài ngang nhau thì lấy đường NGOÀI: viền
+            // 1px cho 2 đường (nền|viền và viền|ruột) dài gần bằng nhau, lấy
+            // đường trong là khung hụt 1px, cắt mất viền của item.
             var best = i
             for j in [i + step, i + 2 * step] {
                 let len = reach(j)
-                if len > bestLen { best = j; bestLen = len }
+                if len * 10 >= bestLen * 9 { best = j; bestLen = max(bestLen, len) }
             }
             out.append(best)
             i += step * 3
