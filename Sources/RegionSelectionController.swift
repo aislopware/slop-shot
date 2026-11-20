@@ -384,6 +384,9 @@ final class SelectionEventView: NSView {
 
     private var startPoint: NSPoint?
     private var freeMode = false            // giữ ⌥ = tắt bắt dính
+    /// Khung hiện tại được kéo tay KHÔNG bắt dính (giữ ⌥ hoặc ⇧). Khi đó ảnh
+    /// chụp giữ đúng khung kéo, không đục góc bo.
+    private(set) var freeForm = false
     private var squareMode = false          // giữ ⇧ lúc kéo = khung vuông
     private var cellMode = false            // giữ ⌘ lúc kéo = thả ra thì bung trọn các dòng bảng
     private var spaceMove = false           // giữ Space lúc kéo = dời cả khung đang kéo
@@ -657,6 +660,7 @@ final class SelectionEventView: NSView {
     /// Bắt đầu chọn ở màn khác → màn này bỏ khung đang dở, về như lúc mới mở.
     func reset() {
         startPoint = nil
+        freeForm = false
         pinnedHover = nil
         grab = nil
         spaceMove = false
@@ -743,6 +747,7 @@ final class SelectionEventView: NSView {
         case .resize(let e):
             model.cursor = p
             model.currentRect = resized(e, to: p)
+            freeForm = freeMode || !model.snapEnabled
             return
         case .button(let b):
             model.cursor = p
@@ -773,6 +778,7 @@ final class SelectionEventView: NSView {
             model.hover = nil
         }
         model.currentRect = rect(from: start, to: model.cursor)
+        freeForm = freeMode || squareMode || !model.snapEnabled
     }
 
     // Chuẩn hoá để kéo theo hướng nào cũng ra rect dương, rồi cho bắt dính.
@@ -822,6 +828,7 @@ final class SelectionEventView: NSView {
             enterAdjust(cellMode ? tableCells(model.currentRect) : model.currentRect)
         } else if let hover = model.hover {
             // Bấm 1 phát (không kéo) lên vùng đang được khoanh → khoanh đúng vùng đó.
+            freeForm = false
             enterAdjust(hover.rect)
         } else if previousRect.width >= 5 {
             enterAdjust(previousRect)   // bấm hụt ra ngoài khung đang chỉnh → giữ khung cũ
@@ -868,6 +875,9 @@ struct RegionSelection {
     let rect: CGRect
     let screen: NSScreen
     let frozen: CGImage?
+    /// Khung bám theo biên trên màn hình (item, cửa sổ, cạnh hút), không phải
+    /// kéo tay với bắt dính đã tắt.
+    let snapped: Bool
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -986,7 +996,8 @@ final class RegionSelectionController {
             // editInline: chọn xong thì GIỮ lớp phủ — showInlineEditor sẽ đắp
             // editor lên đúng cửa sổ này, không đóng-mở lại nên không nháy.
             if editInline, pane.frozen != nil { self?.detachSelection(keeping: pane) } else { self?.cleanup() }
-            completion(RegionSelection(rect: rect, screen: pane.screen, frozen: pane.frozen))
+            completion(RegionSelection(rect: rect, screen: pane.screen, frozen: pane.frozen,
+                                       snapped: pane.model.snapEnabled && !pane.view.freeForm))
         }
 
         let mouse = NSEvent.mouseLocation

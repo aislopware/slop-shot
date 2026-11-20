@@ -182,7 +182,7 @@ final class ScreenCapturer: ObservableObject {
 
         // Vẽ ngay trên vùng chọn (kiểu macshot) cần ảnh đóng băng để làm nền.
         if settings.editAfterSelect, let frozen {
-            await editInPlace(frozen, rect: rect, on: screen)
+            await editInPlace(frozen, rect: rect, on: screen, clipCorners: picked.snapped)
             return
         }
 
@@ -195,7 +195,7 @@ final class ScreenCapturer: ObservableObject {
                 try? await Task.sleep(nanoseconds: 150_000_000)   // đợi overlay biến mất
                 cropped = try await captureCropped(rect: rect, on: screen)
             }
-            cropped = clipRoundedCorners(cropped, rect: rect)
+            if picked.snapped { cropped = clipRoundedCorners(cropped, rect: rect) }
             ScreenFlash.flash(rect, on: screen)
             finishImage(cropped, subtitle: "\(cropped.width)×\(cropped.height)px", on: screen)
         } catch {
@@ -556,10 +556,11 @@ final class ScreenCapturer: ObservableObject {
     // file mới chép clipboard (clipboard có kèm URL file) và ghi lịch sử.
     /// Kéo chọn xong → thanh vẽ hiện ngay trên vùng đó. ⌘C chép (luôn chép,
     /// bất kể cài đặt clipboard — đó là ý của phím), ⌘S lưu thẳng vào folder.
-    private func editInPlace(_ frozen: CGImage, rect: CGRect, on screen: NSScreen) async {
+    private func editInPlace(_ frozen: CGImage, rect: CGRect, on screen: NSScreen, clipCorners: Bool) async {
         let cropped: CGImage
         do {
-            cropped = clipRoundedCorners(try crop(frozen, to: rect, on: screen), rect: rect)
+            let raw = try crop(frozen, to: rect, on: screen)
+            cropped = clipCorners ? clipRoundedCorners(raw, rect: rect) : raw
         } catch {
             selection.cancel()
             report(error)
@@ -845,10 +846,10 @@ final class ScreenCapturer: ObservableObject {
 
     /// Khung chọn bám đúng 1 item bo góc (menu, panel, thẻ…) thì phần nền lọt
     /// vào 4 góc được đục trong suốt. Không thấy góc bo nào thì giữ nguyên ảnh.
-    /// Tắt bắt dính (Settings) là muốn đúng khung mình kéo: giữ nguyên ảnh.
+    /// Chỉ gọi khi khung có bắt dính (`RegionSelection.snapped`): kéo tay với
+    /// ⌥/⇧ hay tắt bắt dính là muốn đúng khung mình kéo.
     private func clipRoundedCorners(_ cropped: CGImage, rect: CGRect) -> CGImage {
-        guard settings.snapToEdges else { return cropped }
-        return RoundedCorners.clip(cropped, scale: CGFloat(cropped.width) / max(rect.width, 1))
+        RoundedCorners.clip(cropped, scale: CGFloat(cropped.width) / max(rect.width, 1))
     }
 
     // Chụp lại màn hình rồi CẮT đúng vùng `rect` — đường lui khi không có ảnh

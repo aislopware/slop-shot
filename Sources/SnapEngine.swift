@@ -352,7 +352,8 @@ final class SnapEngine: @unchecked Sendable {
             let score = cov - 0.25 * Float(abs(cand - center)) / Float(r)
             if score > bestScore { bestScore = score; best = cand }
         }
-        return best.map { pt(outer($0, outward, limit: w) { vCoverage(x: $0, y0: a, y1: b) }) }
+        return best.map { pt(outer($0, outward, within: max(1, center - r)...min(w - 1, center + r)) {
+            vCoverage(x: $0, y0: a, y1: b) }) }
     }
 
     /// Tương tự cho biên ngang.
@@ -371,22 +372,20 @@ final class SnapEngine: @unchecked Sendable {
             let score = cov - 0.25 * Float(abs(cand - center)) / Float(r)
             if score > bestScore { bestScore = score; best = cand }
         }
-        return best.map { pt(outer($0, outward, limit: h) { hCoverage(y: $0, x0: a, x1: b) }) }
+        return best.map { pt(outer($0, outward, within: max(1, center - r)...min(h - 1, center + r)) {
+            hCoverage(y: $0, x0: a, x1: b) }) }
     }
 
     /// Viền 1px cho 2 biên sát nhau phủ ngang nhau (nền|viền, viền|ruột); dính
-    /// vào biên trong là cắt mất viền. Bước ra phía ngoài cạnh tối đa 2px khi
-    /// biên bên đó phủ gần bằng.
-    private func outer(_ best: Int, _ outward: Int, limit: Int, cov: (Int) -> Float) -> Int {
+    /// vào biên trong là cắt mất viền. Bước ra phía ngoài cạnh đúng 1px khi biên
+    /// bên đó phủ gần bằng và vẫn đủ ngưỡng, trong bán kính hút. Không bước xa
+    /// hơn: cách 2px có thể là mép item bên cạnh qua 1 khe hẹp.
+    private func outer(_ best: Int, _ outward: Int, within range: ClosedRange<Int>, cov: (Int) -> Float) -> Int {
         guard outward != 0 else { return best }
-        let ref = cov(best)
-        var pick = best
-        for k in 1...2 {
-            let c = best + outward * k
-            guard c >= 1, c < limit else { break }
-            if cov(c) * 10 >= ref * 9 { pick = c }
-        }
-        return pick
+        let c = best + outward
+        guard range.contains(c) else { return best }
+        let ref = cov(best), next = cov(c)
+        return next >= 0.55 && next * 10 >= ref * 9 ? c : best
     }
 
     // ═════════════════════════════════════════════════════════════════════
