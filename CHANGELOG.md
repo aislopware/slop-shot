@@ -4,6 +4,21 @@ Sinh từ commit log bằng [git-cliff](https://git-cliff.org). Mục nào nằm
 loại (type) của commit quyết định — tức quyết định lúc VIẾT commit, không phải lúc cắt
 release. Quy ước được `scripts/check-commit-msg.sh` chặn ngay ở hook commit-msg.
 
+## [0.12.1](https://github.com/aislopware/slop-shot/compare/v0.12.0...v0.12.1) — 2026-11-20
+
+### Bug fixes
+
+- Keep corner background when saving as JPEG or BMP ([`360caa2`](https://github.com/aislopware/slop-shot/commit/360caa278735dbbc4bbed7a181cb184edd03b808))
+- Keep clipboard corners transparent with a JPEG save format ([`fd07c83`](https://github.com/aislopware/slop-shot/commit/fd07c839848958b4f3060ea20ed4fcc81b932be9))
+- Restore exact corner pixels in JPEG and editor exports ([`ecbef0f`](https://github.com/aislopware/slop-shot/commit/ecbef0f26d43202cf417fe2f9bd8458f9b72fc90))
+- Carry the corner background to every JPEG save path ([`723ddb6`](https://github.com/aislopware/slop-shot/commit/723ddb671f95f3c7692bda495f82b2a4b177fad4))
+- Keep only corner pixels in the saved corner background ([`602184c`](https://github.com/aislopware/slop-shot/commit/602184c8c56cb92879c3e5fdde94eec717e13ab9))
+- Keep history order while saving the corner background ([`cb79359`](https://github.com/aislopware/slop-shot/commit/cb79359b85161b99889d1c4cc6a93186e18db42a))
+
+### Tooling
+
+- Add a script that cuts stickers out of flat backgrounds ([`85a95b9`](https://github.com/aislopware/slop-shot/commit/85a95b968361e0a53ab4d968204156410c53613e))
+
 ## [0.12.0](https://github.com/aislopware/slop-shot/compare/v0.11.3...v0.12.0) — 2026-11-20
 
 ### Features
