@@ -52,9 +52,30 @@ final class AppSettings: ObservableObject {
             guard let dest = CGImageDestinationCreateWithData(
                 data, utType.identifier as CFString, 1, nil) else { return nil }
             let options = isLossy ? [kCGImageDestinationLossyCompressionQuality: 0.9] : [:]
-            CGImageDestinationAddImage(dest, cg, options as CFDictionary)
+            CGImageDestinationAddImage(dest, hasAlpha ? cg : Self.opaque(cg), options as CFDictionary)
             guard CGImageDestinationFinalize(dest) else { return nil }
             return data as Data
+        }
+
+        /// JPEG, BMP không giữ được độ trong suốt: phần trong suốt (góc bo đã
+        /// đục) sẽ thành đen, nên lót nền trắng trước khi ghi.
+        private var hasAlpha: Bool { self != .jpeg && self != .bmp }
+
+        private static func opaque(_ cg: CGImage) -> CGImage {
+            switch cg.alphaInfo {
+            case .none, .noneSkipFirst, .noneSkipLast: return cg
+            default: break
+            }
+            let space = cg.colorSpace.flatMap { $0.model == .rgb ? $0 : nil }
+                ?? CGColorSpace(name: CGColorSpace.sRGB)!
+            guard let ctx = CGContext(data: nil, width: cg.width, height: cg.height, bitsPerComponent: 8,
+                                      bytesPerRow: 0, space: space,
+                                      bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return cg }
+            let rect = CGRect(x: 0, y: 0, width: cg.width, height: cg.height)
+            ctx.setFillColor(CGColor(gray: 1, alpha: 1))
+            ctx.fill(rect)
+            ctx.draw(cg, in: rect)
+            return ctx.makeImage() ?? cg
         }
     }
 

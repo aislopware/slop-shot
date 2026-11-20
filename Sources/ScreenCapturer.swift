@@ -188,13 +188,14 @@ final class ScreenCapturer: ObservableObject {
 
         do {
             // Có ảnh đóng băng thì chỉ việc cắt — không cần chụp lại, không cần chờ.
-            let cropped: CGImage
+            var cropped: CGImage
             if let frozen {
                 cropped = try crop(frozen, to: rect, on: screen)
             } else {
                 try? await Task.sleep(nanoseconds: 150_000_000)   // đợi overlay biến mất
                 cropped = try await captureCropped(rect: rect, on: screen)
             }
+            cropped = clipRoundedCorners(cropped, rect: rect)
             ScreenFlash.flash(rect, on: screen)
             finishImage(cropped, subtitle: "\(cropped.width)×\(cropped.height)px", on: screen)
         } catch {
@@ -558,7 +559,7 @@ final class ScreenCapturer: ObservableObject {
     private func editInPlace(_ frozen: CGImage, rect: CGRect, on screen: NSScreen) async {
         let cropped: CGImage
         do {
-            cropped = try crop(frozen, to: rect, on: screen)
+            cropped = clipRoundedCorners(try crop(frozen, to: rect, on: screen), rect: rect)
         } catch {
             selection.cancel()
             report(error)
@@ -840,6 +841,12 @@ final class ScreenCapturer: ObservableObject {
                           userInfo: [NSLocalizedDescriptionKey: "Couldn't crop the selected area."])
         }
         return cropped
+    }
+
+    /// Khung chọn bám đúng 1 item bo góc (menu, panel, thẻ…) thì phần nền lọt
+    /// vào 4 góc được đục trong suốt. Không thấy góc bo nào thì giữ nguyên ảnh.
+    private func clipRoundedCorners(_ cropped: CGImage, rect: CGRect) -> CGImage {
+        RoundedCorners.clip(cropped, scale: CGFloat(cropped.width) / max(rect.width, 1))
     }
 
     // Chụp lại màn hình rồi CẮT đúng vùng `rect` — đường lui khi không có ảnh
