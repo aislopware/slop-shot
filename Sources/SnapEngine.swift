@@ -298,7 +298,7 @@ final class SnapEngine: @unchecked Sendable {
             // 1px cho 2 đường (nền|viền và viền|ruột) dài gần bằng nhau, lấy
             // đường trong là khung hụt 1px, cắt mất viền của item.
             var best = i
-            for j in [i + step, i + 2 * step] {
+            for j in [i + step, i + 2 * step] where step > 0 ? j <= stop : j >= stop {
                 let len = reach(j)
                 if len * 10 >= bestLen * 9 { best = j; bestLen = max(bestLen, len) }
             }
@@ -334,7 +334,8 @@ final class SnapEngine: @unchecked Sendable {
 
     /// Tìm biên dọc "đáng dính" gần `x` nhất, chấm điểm theo độ phủ trên đoạn
     /// [y0, y1] (chính là chiều cao khung đang kéo). Trả nil nếu không có gì đáng.
-    func snapX(near x: CGFloat, from y0: CGFloat, to y1: CGFloat, radius: CGFloat) -> CGFloat? {
+    /// `outward`: phía NGOÀI của cạnh đang kéo (-1 cạnh trái, +1 cạnh phải).
+    func snapX(near x: CGFloat, from y0: CGFloat, to y1: CGFloat, radius: CGFloat, outward: Int = 0) -> CGFloat? {
         let center = clamp(px(x), 0, w)
         let r = max(1, px(radius))
         var a = clamp(px(min(y0, y1)), 0, h - 1)
@@ -351,11 +352,11 @@ final class SnapEngine: @unchecked Sendable {
             let score = cov - 0.25 * Float(abs(cand - center)) / Float(r)
             if score > bestScore { bestScore = score; best = cand }
         }
-        return best.map(pt)
+        return best.map { pt(outer($0, outward, limit: w) { vCoverage(x: $0, y0: a, y1: b) }) }
     }
 
     /// Tương tự cho biên ngang.
-    func snapY(near y: CGFloat, from x0: CGFloat, to x1: CGFloat, radius: CGFloat) -> CGFloat? {
+    func snapY(near y: CGFloat, from x0: CGFloat, to x1: CGFloat, radius: CGFloat, outward: Int = 0) -> CGFloat? {
         let center = clamp(px(y), 0, h)
         let r = max(1, px(radius))
         var a = clamp(px(min(x0, x1)), 0, w - 1)
@@ -370,7 +371,22 @@ final class SnapEngine: @unchecked Sendable {
             let score = cov - 0.25 * Float(abs(cand - center)) / Float(r)
             if score > bestScore { bestScore = score; best = cand }
         }
-        return best.map(pt)
+        return best.map { pt(outer($0, outward, limit: h) { hCoverage(y: $0, x0: a, x1: b) }) }
+    }
+
+    /// Viền 1px cho 2 biên sát nhau phủ ngang nhau (nền|viền, viền|ruột); dính
+    /// vào biên trong là cắt mất viền. Bước ra phía ngoài cạnh tối đa 2px khi
+    /// biên bên đó phủ gần bằng.
+    private func outer(_ best: Int, _ outward: Int, limit: Int, cov: (Int) -> Float) -> Int {
+        guard outward != 0 else { return best }
+        let ref = cov(best)
+        var pick = best
+        for k in 1...2 {
+            let c = best + outward * k
+            guard c >= 1, c < limit else { break }
+            if cov(c) * 10 >= ref * 9 { pick = c }
+        }
+        return pick
     }
 
     // ═════════════════════════════════════════════════════════════════════

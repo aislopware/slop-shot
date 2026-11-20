@@ -614,16 +614,16 @@ final class SelectionEventView: NSView {
         }
 
         let (nx0, h0) = snapLine(minX, geo: windows.edgeXs) {
-            snap?.snapX(near: minX, from: minY, to: maxY, radius: snapRadius)
+            snap?.snapX(near: minX, from: minY, to: maxY, radius: snapRadius, outward: -1)
         }
         let (nx1, h1) = snapLine(maxX, geo: windows.edgeXs) {
-            snap?.snapX(near: maxX, from: minY, to: maxY, radius: snapRadius)
+            snap?.snapX(near: maxX, from: minY, to: maxY, radius: snapRadius, outward: 1)
         }
         let (ny0, h2) = snapLine(minY, geo: windows.edgeYs) {
-            snap?.snapY(near: minY, from: minX, to: maxX, radius: snapRadius)
+            snap?.snapY(near: minY, from: minX, to: maxX, radius: snapRadius, outward: -1)
         }
         let (ny1, h3) = snapLine(maxY, geo: windows.edgeYs) {
-            snap?.snapY(near: maxY, from: minX, to: maxX, radius: snapRadius)
+            snap?.snapY(near: maxY, from: minX, to: maxX, radius: snapRadius, outward: 1)
         }
         if h0 { gx.append(nx0) }
         if h1 { gx.append(nx1) }
