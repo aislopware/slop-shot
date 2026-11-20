@@ -80,6 +80,8 @@ enum RoundedCorners {
             let side: Int           // cạnh ô vuông chứa góc
             let filled: [Bool]      // [y*side + x] pixel nền phía ngoài đường cong
             let center: Double      // tâm đường cong ≈ (r, r)
+            let hEdge: (Int, Int, Int)  // màu mép item trên mép ngang, sau đoạn cong
+            let vEdge: (Int, Int, Int)  // …và trên mép dọc
         }
 
         func detect(cap: Int) -> Shape? {
@@ -144,15 +146,28 @@ enum RoundedCorners {
             guard total == count, lens[0] == gx else { return nil }
 
             // Đối xứng qua đường chéo, và thực sự CONG: tới nửa bán kính thì
-            // hàng nền đã hụt hẳn (góc tròn ≈ 13% r, squircle còn ít hơn).
+            // hàng nền đã hụt hẳn (góc tròn ≈ 13% r, squircle còn ít hơn; khung
+            // lẹm vào trong cung thì nhiều hơn, vẫn là cung).
             var asym = 0
             for y in 0..<side {
                 for x in 0..<side where filled[y * side + x] != filled[x * side + y] { asym += 1 }
             }
             guard asym <= max(2, count / 8),
                   lens[g / 2] * 10 <= gx * 6 else { return nil }
+            // Góc vát chéo hay chi tiết tam giác trong ảnh: biên là đường THẲNG
+            // nối 2 đầu đoạn nền. Cung tròn thì võng vào phía góc, trung bình
+            // lệch khỏi dây cung ≥ nửa pixel kể cả khi chỉ thấy 1 khúc cung.
+            var sag = 0.0
+            for y in 0...gy {
+                sag += Double(gx) * (1 - Double(y) / Double(gy)) - Double(lens[y])
+            }
+            guard sag / Double(gy + 1) >= 0.4 else { return nil }
 
-            return Shape(bg: bg, side: side, filled: filled, center: Double(g))
+            // Màu mép item: lấy trên mép thẳng, đủ xa chỗ bắt đầu cong để không
+            // dính pixel khử răng cưa.
+            let hEdge = rgb(min(gx + g / 2 + 2, w / 2), 0)
+            let vEdge = rgb(0, min(gy + g / 2 + 2, h / 2))
+            return Shape(bg: bg, side: side, filled: filled, center: Double(g), hEdge: hEdge, vEdge: vEdge)
         }
 
         /// Đục nền thành trong suốt, tách lại độ phủ ở rìa khử răng cưa.
@@ -170,12 +185,33 @@ enum RoundedCorners {
             /// Độ phủ của item tại pixel, coi nó là hỗn hợp nền + màu item ngay
             /// bên trong. nil = pixel không phải hỗn hợp đó (viền tối hơn nền
             /// trong khi ruột sáng hơn nền…), tức là chính item.
+            /// `solidBeyond`: pixel đã đi xa khỏi nền ít nhất bằng màu tham chiếu
+            /// thì là item đặc, kể cả khi lẫn màu khác (viền + ruột cùng lọt
+            /// vào 1 pixel khử răng cưa).
+            func blend(_ p: (Int, Int, Int), _ f: (Int, Int, Int), solidBeyond: Bool = false) -> Double? {
+                let fb = (Double(f.0 - bg.0), Double(f.1 - bg.1), Double(f.2 - bg.2))
+                let len2 = fb.0 * fb.0 + fb.1 * fb.1 + fb.2 * fb.2
+                guard len2 > tol * tol else { return nil }
+                let pb = (Double(p.0 - bg.0), Double(p.1 - bg.1), Double(p.2 - bg.2))
+                let raw = (pb.0 * fb.0 + pb.1 * fb.1 + pb.2 * fb.2) / len2
+                if solidBeyond && raw >= 0.95 { return 1 }
+                let a = max(0, min(1, raw))
+                let residual = max(abs(pb.0 - a * fb.0), max(abs(pb.1 - a * fb.1), abs(pb.2 - a * fb.2)))
+                return residual > tol ? nil : a
+            }
+
             func coverage(_ x: Int, _ y: Int) -> Double? {
+                let p = rgb(x, y)
+                // Đường cong là phần nối của mép thẳng, nên màu mép thẳng là màu
+                // tham chiếu đáng tin nhất: viền xám 1px trên card trắng là pixel
+                // ĐẶC màu xám, không phải trắng phủ 50% — so với ruột trắng sẽ
+                // thành nửa trong suốt, dán lên nền trắng là mất viền.
+                if let a = blend(p, x >= y ? s.hEdge : s.vEdge, solidBeyond: true) { return a }
+
+                // Mép đổi màu dọc đường cong (icon gradient…): lấy mẫu khác nền
+                // nhiều nhất trong 3 bước vào trong. Tính cả chính pixel: card chỉ
+                // có viền, ruột cùng màu nền, thì đi vào trong chỉ gặp lại nền.
                 let (vx, vy) = normal(x, y)
-                // Màu tham chiếu: mẫu khác nền nhiều nhất trong 3 bước vào trong
-                // (viền 1px đậm hơn phần ruột thì viền mới là màu thật của rìa).
-                // Tính cả chính pixel: card chỉ có viền, ruột cùng màu nền, thì
-                // đi vào trong chỉ gặp lại nền — pixel viền phải giữ nguyên.
                 var ref: (Int, Int, Int)?
                 var refD = 0
                 for k in 0...3 {
@@ -186,13 +222,7 @@ enum RoundedCorners {
                     if d > refD { refD = d; ref = rgb(rx, ry) }
                 }
                 guard let f = ref, Double(refD) > tol else { return 0 }
-                let p = rgb(x, y)
-                let fb = (Double(f.0 - bg.0), Double(f.1 - bg.1), Double(f.2 - bg.2))
-                let pb = (Double(p.0 - bg.0), Double(p.1 - bg.1), Double(p.2 - bg.2))
-                let a = max(0, min(1, (pb.0 * fb.0 + pb.1 * fb.1 + pb.2 * fb.2)
-                                      / (fb.0 * fb.0 + fb.1 * fb.1 + fb.2 * fb.2)))
-                let residual = max(abs(pb.0 - a * fb.0), max(abs(pb.1 - a * fb.1), abs(pb.2 - a * fb.2)))
-                return residual > tol ? nil : a
+                return blend(p, f)
             }
 
             // Nền đã loang: trong suốt, trừ mấy pixel còn ánh màu item (rìa mờ).
@@ -210,12 +240,16 @@ enum RoundedCorners {
                 for y in 0..<side {
                     for x in 0..<side where prev[y * side + x] == nil {
                         let (vx, vy) = normal(x, y)
+                        let here = diff(x, y, bg)
+                        // Đi vào trong thì pixel rìa phải càng lúc càng khác nền
+                        // (đang leo lên màu mép). Khác nền ít hơn pixel ngoài nó
+                        // là đã qua đỉnh viền, vào tới ruột item: giữ nguyên.
                         let outward = [(-vx, -vy), (-vx + vy, -vy - vx), (-vx - vy, -vy + vx)].contains { dx, dy in
                             let n = max(abs(dx), abs(dy))
                             guard n > 0.1 else { return false }
                             let ox = x + Int((dx / n).rounded()), oy = y + Int((dy / n).rounded())
                             guard ox >= 0, oy >= 0, ox < side, oy < side, let a = prev[oy * side + ox] else { return false }
-                            return a < 0.98
+                            return a < 0.98 && here + 2 >= diff(ox, oy, bg)
                         }
                         guard outward, let a = coverage(x, y), a < 0.98 else { continue }
                         alpha[y * side + x] = a
