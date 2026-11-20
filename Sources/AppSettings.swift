@@ -57,10 +57,9 @@ final class AppSettings: ObservableObject {
             return data as Data
         }
 
-        /// JPEG, BMP không giữ được độ trong suốt. Ảnh chụp mới với định dạng
-        /// này không bị đục góc (xem `ScreenCapturer.clipRoundedCorners`); ảnh
-        /// trong suốt có sẵn (dán vào editor, lịch sử cũ) thì lót nền trắng,
-        /// không thì phần trong suốt thành đen.
+        /// JPEG, BMP không giữ được độ trong suốt. Ảnh vừa chụp thì
+        /// `ScreenCapturer.writeImage` đặt lên ảnh gốc chưa đục góc; ảnh trong
+        /// suốt khác đến đây thì lót nền trắng, không thì phần trong suốt thành đen.
         var keepsTransparency: Bool { self != .jpeg && self != .bmp }
 
         private static func opaque(_ cg: CGImage) -> CGImage {

@@ -21,6 +21,21 @@ enum RoundedCorners {
     /// Chênh lệch tối đa (theo kênh) vẫn coi là cùng màu nền.
     private static let tolerance = 8
 
+    /// `top` vẽ đè lên `backdrop` (cùng kích thước), ra ảnh không trong suốt:
+    /// góc đã đục lấy lại nền gốc, nét vẽ thêm trên `top` vẫn giữ.
+    static func flatten(_ top: CGImage, over backdrop: CGImage) -> CGImage? {
+        guard top.width == backdrop.width, top.height == backdrop.height else { return nil }
+        let space = backdrop.colorSpace.flatMap { $0.model == .rgb ? $0 : nil }
+            ?? CGColorSpace(name: CGColorSpace.sRGB)!
+        guard let ctx = CGContext(data: nil, width: top.width, height: top.height, bitsPerComponent: 8,
+                                  bytesPerRow: 0, space: space,
+                                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+        let rect = CGRect(x: 0, y: 0, width: top.width, height: top.height)
+        ctx.draw(backdrop, in: rect)
+        ctx.draw(top, in: rect)
+        return ctx.makeImage()
+    }
+
     /// Ảnh với các góc bo đã trong suốt; không góc nào bo thì trả lại đúng `cg`.
     /// `scale` = pixel trên mỗi point, để giới hạn bán kính theo point.
     static func clip(_ cg: CGImage, scale: CGFloat) -> CGImage {

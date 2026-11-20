@@ -195,9 +195,11 @@ final class ScreenCapturer: ObservableObject {
                 try? await Task.sleep(nanoseconds: 150_000_000)   // đợi overlay biến mất
                 cropped = try await captureCropped(rect: rect, on: screen)
             }
+            let raw = cropped
             if picked.snapped { cropped = clipRoundedCorners(cropped, rect: rect) }
             ScreenFlash.flash(rect, on: screen)
-            finishImage(cropped, subtitle: "\(cropped.width)×\(cropped.height)px", on: screen)
+            finishImage(cropped, subtitle: "\(cropped.width)×\(cropped.height)px", on: screen,
+                        backdrop: cropped === raw ? nil : raw)
         } catch {
             report(error)
         }
@@ -508,9 +510,10 @@ final class ScreenCapturer: ObservableObject {
     }
 
     // Bấm "Save" trên preview ẢNH: ghi THẲNG vào folder đích (đúng định dạng đã chọn).
-    private func quickSaveImage(_ cgImage: CGImage, baseName: String) {
+    private func quickSaveImage(_ cgImage: CGImage, baseName: String, backdrop: CGImage? = nil) {
         do {
-            let dest = try writeImage(cgImage, baseName: baseName, to: settings.saveFolderURL)
+            let dest = try writeImage(cgImage, baseName: baseName, to: settings.saveFolderURL,
+                                      backdrop: backdrop)
             lastSavedURL = dest
             lastStatus = "✅ Saved to \(settings.saveFolderDisplay)"
             // KHÔNG hide() ở đây — preview tự hiện tick rồi trượt đi (như Copy).
@@ -557,9 +560,9 @@ final class ScreenCapturer: ObservableObject {
     /// Kéo chọn xong → thanh vẽ hiện ngay trên vùng đó. ⌘C chép (luôn chép,
     /// bất kể cài đặt clipboard — đó là ý của phím), ⌘S lưu thẳng vào folder.
     private func editInPlace(_ frozen: CGImage, rect: CGRect, on screen: NSScreen, clipCorners: Bool) async {
-        let cropped: CGImage
+        let cropped: CGImage, raw: CGImage
         do {
-            let raw = try crop(frozen, to: rect, on: screen)
+            raw = try crop(frozen, to: rect, on: screen)
             cropped = clipCorners ? clipRoundedCorners(raw, rect: rect) : raw
         } catch {
             selection.cancel()
@@ -579,8 +582,9 @@ final class ScreenCapturer: ObservableObject {
         // chụp gốc (Display P3 trên màn Mac) để không mất màu.
         let cg = Self.eightBit(rendered, space: cropped.colorSpace)
         let subtitle = "\(cg.width)×\(cg.height)px"
-        finishImage(cg, subtitle: subtitle, on: screen, forceCopy: action == .copy)
-        if action == .save { quickSaveImage(cg, baseName: "SlopShot \(timestampNow())") }
+        let backdrop = cropped === raw ? nil : raw
+        finishImage(cg, subtitle: subtitle, on: screen, forceCopy: action == .copy, backdrop: backdrop)
+        if action == .save { quickSaveImage(cg, baseName: "SlopShot \(timestampNow())", backdrop: backdrop) }
     }
 
     private static func eightBit(_ cg: CGImage, space: CGColorSpace?) -> CGImage {
@@ -593,8 +597,10 @@ final class ScreenCapturer: ObservableObject {
         return ctx.makeImage() ?? cg
     }
 
+    /// `backdrop`: ảnh gốc trước khi đục góc bo, để lưu JPEG/BMP vẫn giữ nền ở
+    /// góc (clipboard, PNG thì dùng ảnh đã đục).
     private func finishImage(_ cgImage: CGImage, subtitle: String, on screen: NSScreen,
-                             forceCopy: Bool = false) {
+                             forceCopy: Bool = false, backdrop: CGImage? = nil) {
         let nsImage = NSImage(cgImage: cgImage,
                               size: NSSize(width: cgImage.width, height: cgImage.height))
         let baseName = "SlopShot \(timestampNow())"
@@ -622,7 +628,7 @@ final class ScreenCapturer: ObservableObject {
                     pb.clearContents()
                     pb.writeObjects([nsImage, url as NSURL])
                 },
-                onSave: { [weak self] in self?.quickSaveImage(cgImage, baseName: baseName) }
+                onSave: { [weak self] in self?.quickSaveImage(cgImage, baseName: baseName, backdrop: backdrop) }
             )
         }
 
@@ -657,9 +663,14 @@ final class ScreenCapturer: ObservableObject {
 
     // Ghi CGImage thành file ảnh (theo format đã chọn) vào `folder`, tránh trùng tên.
     @discardableResult
-    private func writeImage(_ cgImage: CGImage, baseName: String, to folder: URL) throws -> URL {
+    private func writeImage(_ cgImage: CGImage, baseName: String, to folder: URL,
+                            backdrop: CGImage? = nil) throws -> URL {
         let fmt = settings.imageFormat
-        guard let data = fmt.encode(cgImage) else {
+        // JPEG/BMP không có kênh trong suốt: đặt ảnh lên ảnh gốc chưa đục góc để
+        // góc giữ đúng nền trên màn hình thay vì lót trắng.
+        let image = fmt.keepsTransparency ? cgImage
+            : backdrop.flatMap { RoundedCorners.flatten(cgImage, over: $0) } ?? cgImage
+        guard let data = fmt.encode(image) else {
             throw NSError(domain: "SlopShot", code: 4,
                           userInfo: [NSLocalizedDescriptionKey: "Couldn't encode the image."])
         }
@@ -847,11 +858,9 @@ final class ScreenCapturer: ObservableObject {
     /// Khung chọn bám đúng 1 item bo góc (menu, panel, thẻ…) thì phần nền lọt
     /// vào 4 góc được đục trong suốt. Không thấy góc bo nào thì giữ nguyên ảnh.
     /// Chỉ gọi khi khung có bắt dính (`RegionSelection.snapped`): kéo tay với
-    /// ⌥/⇧ hay tắt bắt dính là muốn đúng khung mình kéo. Lưu JPEG/BMP thì giữ
-    /// nguyên nền ở góc: định dạng đó không có kênh trong suốt.
+    /// ⌥/⇧ hay tắt bắt dính là muốn đúng khung mình kéo.
     private func clipRoundedCorners(_ cropped: CGImage, rect: CGRect) -> CGImage {
-        guard settings.imageFormat.keepsTransparency else { return cropped }
-        return RoundedCorners.clip(cropped, scale: CGFloat(cropped.width) / max(rect.width, 1))
+        RoundedCorners.clip(cropped, scale: CGFloat(cropped.width) / max(rect.width, 1))
     }
 
     // Chụp lại màn hình rồi CẮT đúng vùng `rect` — đường lui khi không có ảnh
