@@ -57,34 +57,33 @@ enum RoundedCorners {
         guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
                                   bytesPerRow: bpr, space: space,
                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
-              let data = ctx.data,
+              let data = ctx.data else { return (cg, nil) }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        // Bitmap context xếp hàng 0 = hàng TRÊN cùng của ảnh.
+        let px = data.bindMemory(to: UInt8.self, capacity: h * bpr)
+
+        // Dò đủ 4 góc trước rồi mới cắt (các góc không chồng nhau: cap < cạnh/2),
+        // để ảnh không có góc bo nào khỏi phải dựng thêm bitmap nền.
+        let found = [(1, 1), (-1, 1), (1, -1), (-1, -1)].compactMap { sx, sy -> (Corner, Corner.Shape)? in
+            let corner = Corner(px: px, w: w, h: h, sx: sx, sy: sy)
+            return corner.detect(cap: cap).map { (corner, $0) }
+        }
+        guard !found.isEmpty,
               let plateCtx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
                                        bytesPerRow: bpr, space: space,
                                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
               let plateData = plateCtx.data else { return (cg, nil) }
-        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
         plateCtx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
-        // Bitmap context xếp hàng 0 = hàng TRÊN cùng của ảnh.
-        let px = data.bindMemory(to: UInt8.self, capacity: h * bpr)
         let plate = plateData.bindMemory(to: UInt8.self, capacity: h * bpr)
-
-        var changed = false
-        for (sx, sy) in [(1, 1), (-1, 1), (1, -1), (-1, -1)] {
-            let corner = Corner(px: px, plate: plate, w: w, h: h, sx: sx, sy: sy)
-            if let shape = corner.detect(cap: cap) {
-                corner.cut(shape)
-                changed = true
-            }
-        }
-        guard changed, let out = ctx.makeImage() else { return (cg, nil) }
-        return (out, plateCtx.makeImage())
+        for (corner, shape) in found { corner.cut(shape, plate: plate) }
+        guard let out = ctx.makeImage(), let plateImage = plateCtx.makeImage() else { return (cg, nil) }
+        return (out, plateImage)
     }
 
     /// 1 góc của ảnh, đọc trong hệ toạ độ riêng: (0,0) là pixel ở góc, x đi
     /// dọc mép ngang vào trong, y đi dọc mép dọc vào trong.
     private struct Corner {
         let px: UnsafeMutablePointer<UInt8>
-        let plate: UnsafeMutablePointer<UInt8>
         let w: Int, h: Int
         let sx: Int, sy: Int
 
@@ -200,7 +199,9 @@ enum RoundedCorners {
         }
 
         /// Đục nền thành trong suốt, tách lại độ phủ ở rìa khử răng cưa.
-        func cut(_ s: Shape) {
+        /// `plate`: bản sao ảnh gốc; pixel rìa được ghi màu nền vào đó để ảnh đã
+        /// đục đặt lên ra lại đúng pixel gốc.
+        func cut(_ s: Shape, plate: UnsafeMutablePointer<UInt8>) {
             let side = s.side, bg = s.bg
             let tol = Double(RoundedCorners.tolerance)
 
@@ -289,24 +290,33 @@ enum RoundedCorners {
             for y in 0..<side {
                 for x in 0..<side {
                     guard let a = alpha[y * side + x] else { continue }
-                    write(x, y, a, bg)
+                    write(x, y, a, bg, plate: plate)
                 }
             }
         }
 
         /// Ghi pixel với độ phủ `a`. Premultiplied: a·F = p − (1−a)·B.
-        private func write(_ x: Int, _ y: Int, _ a: Double, _ bg: (Int, Int, Int)) {
+        private func write(_ x: Int, _ y: Int, _ a: Double, _ bg: (Int, Int, Int),
+                           plate: UnsafeMutablePointer<UInt8>) {
             let o = offset(x, y)
-            plate[o] = UInt8(bg.0); plate[o + 1] = UInt8(bg.1); plate[o + 2] = UInt8(bg.2); plate[o + 3] = 255
             guard a > 0.02 else {
+                // Đục hẳn: plate giữ nguyên pixel gốc (nền có thể hơi loang).
                 px[o] = 0; px[o + 1] = 0; px[o + 2] = 0; px[o + 3] = 0
                 return
             }
+            let alpha = UInt8((255 * a).rounded())
+            let ar = Double(alpha) / 255
             for (c, b) in [bg.0, bg.1, bg.2].enumerated() {
-                let v = Double(px[o + c]) - (1 - a) * Double(b)
-                px[o + c] = UInt8(max(0, min(255 * a, v)).rounded())
+                let p = Double(px[o + c])
+                let f = UInt8(max(0, min(255 * a, p - (1 - a) * Double(b))).rounded())
+                px[o + c] = f
+                // Plate = nền sao cho f + (1−a)·plate ra lại đúng p, kể cả khi f bị
+                // kẹp (pixel không nằm đúng trên đường nền → màu item).
+                plate[o + c] = ar < 0.995
+                    ? UInt8(max(0, min(255, (p - Double(f)) / (1 - ar))).rounded()) : UInt8(b)
             }
-            px[o + 3] = UInt8((255 * a).rounded())
+            px[o + 3] = alpha
+            plate[o + 3] = 255
         }
     }
 }

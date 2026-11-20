@@ -1233,11 +1233,16 @@ struct EditorView: View {
     private func flipBase(horizontal: Bool) {
         guard let cg = ImageOps.cg(image),
               let out = ImageOps.flip(cg, horizontal: horizontal) else { return }
-        image = ImageOps.ns(out, scale: image.size.width / CGFloat(cg.width))
-        backdrop = backdrop.flatMap { b in
-            ImageOps.cg(b).flatMap { ImageOps.flip($0, horizontal: horizontal) }
-                .map { ImageOps.ns($0, scale: image.size.width / CGFloat($0.width)) }
+        // Biến đổi cả nền góc bo trước khi đổi gì: hỏng thì giữ nguyên tất cả.
+        var newBackdrop: CGImage?
+        if let backdrop {
+            guard let b = ImageOps.cg(backdrop).flatMap({ ImageOps.flip($0, horizontal: horizontal) })
+            else { status = "Flip failed"; return }
+            newBackdrop = b
         }
+        let scale = image.size.width / CGFloat(cg.width)
+        image = ImageOps.ns(out, scale: scale)
+        backdrop = newBackdrop.map { ImageOps.ns($0, scale: scale) }
         // Toạ độ dò sẵn lệch hết sau khi lật → dò lại từ đầu.
         pendingMatches = []; redactedMatches = []; redactHint = 0
         for i in annotations.indices {
@@ -1254,11 +1259,16 @@ struct EditorView: View {
     private func rotateBase(clockwise: Bool) {
         guard let cg = ImageOps.cg(image),
               let out = ImageOps.rotate90(cg, clockwise: clockwise) else { return }
-        image = ImageOps.ns(out, scale: image.size.width / CGFloat(cg.width))
-        backdrop = backdrop.flatMap { b in
-            ImageOps.cg(b).flatMap { ImageOps.rotate90($0, clockwise: clockwise) }
-                .map { ImageOps.ns($0, scale: image.size.width / CGFloat($0.width)) }
+        // Như flipBase: biến đổi nền góc bo trước, hỏng thì giữ nguyên tất cả.
+        var newBackdrop: CGImage?
+        if let backdrop {
+            guard let b = ImageOps.cg(backdrop).flatMap({ ImageOps.rotate90($0, clockwise: clockwise) })
+            else { status = "Rotate failed"; return }
+            newBackdrop = b
         }
+        let scale = image.size.width / CGFloat(cg.width)
+        image = ImageOps.ns(out, scale: scale)
+        backdrop = newBackdrop.map { ImageOps.ns($0, scale: scale) }
         // Như flipBase: xoay xong toạ độ cũ vô nghĩa.
         pendingMatches = []; redactedMatches = []; redactHint = 0
         for i in annotations.indices {

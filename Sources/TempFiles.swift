@@ -23,4 +23,9 @@ enum TempFiles {
         if reserve { fm.createFile(atPath: url.path, contents: nil) }
         return url
     }
+
+    /// File nền góc bo đi kèm ảnh tạm `url` ("X.png" → "X.backdrop.png").
+    static func backdropURL(for url: URL) -> URL {
+        url.deletingPathExtension().appendingPathExtension("backdrop.png")
+    }
 }

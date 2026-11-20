@@ -32,6 +32,7 @@ final class ScreenCapturer: ObservableObject {
     private var recRect: CGRect = .zero      // vùng đang quay (để Restart)
     private var recScreen: NSScreen?         // màn hình đang quay
     private var lastImage: NSImage?   // giữ ảnh gần nhất để mở editor
+    private var lastBackdrop: NSImage?   // nền gốc ở góc bo đã đục của ảnh đó (nil = không đục)
 
     /// Đang có một lượt chụp dở (overlay chọn vùng, chụp cuộn…). Bấm phím tắt
     /// thêm lần nữa lúc này từng mở chồng overlay thứ hai lên, overlay cũ bị bỏ
@@ -147,7 +148,7 @@ final class ScreenCapturer: ObservableObject {
     // Mở editor cho ảnh gần nhất (gọi từ menu).
     func openLastInEditor() {
         guard let img = lastImage else { return }
-        editor.open(image: img, sourceURL: lastSavedURL)
+        editor.open(image: img, sourceURL: lastSavedURL, backdrop: lastBackdrop)
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -453,6 +454,7 @@ final class ScreenCapturer: ObservableObject {
 
         lastSavedURL = url
         lastImage = nil
+        lastBackdrop = nil
         lastStatus = "✅ Recording finished. Click Save to keep it."
 
         // Poster = 1 frame của video để làm ảnh thu nhỏ cho preview card.
@@ -606,9 +608,11 @@ final class ScreenCapturer: ObservableObject {
         // Giữ chỗ tên file ngay, file thật ghi sau (LUÔN ghi tạm; bấm Save trên
         // preview mới ra file chính thức).
         let url = TempFiles.uniqueURL(named: baseName, ext: "png", reserve: true)
+        let backdropImage = backdrop.map { NSImage(cgImage: $0, size: nsImage.size) }
 
         playCaptureSound()
         lastImage = nsImage
+        lastBackdrop = backdropImage
         lastSavedURL = url
         let copy = settings.copyToClipboard || forceCopy
         lastStatus = copy
@@ -621,11 +625,7 @@ final class ScreenCapturer: ObservableObject {
                 image: nsImage,
                 fileURL: url,
                 on: screen,
-                onEdit: { [weak self] in
-                    self?.editor.open(image: nsImage, sourceURL: url, backdrop: backdrop.map {
-                        NSImage(cgImage: $0, size: nsImage.size)
-                    })
-                },
+                onEdit: { [weak self] in self?.editor.open(image: nsImage, sourceURL: url, backdrop: backdropImage) },
                 onCopy: {
                     let pb = NSPasteboard.general
                     pb.clearContents()
@@ -638,7 +638,12 @@ final class ScreenCapturer: ObservableObject {
         Task {
             let written = await Task.detached(priority: .userInitiated) {
                 guard let data = AppSettings.ImageFormat.png.encode(cgImage) else { return false }
-                return (try? data.write(to: url)) != nil
+                guard (try? data.write(to: url)) != nil else { return false }
+                // Nền góc bo cạnh file tạm, để mở lại từ History rồi lưu JPEG vẫn có.
+                if let backdrop, let plate = AppSettings.ImageFormat.png.encode(backdrop) {
+                    try? plate.write(to: TempFiles.backdropURL(for: url))
+                }
+                return true
             }.value
             if !written { try? FileManager.default.removeItem(at: url) }
             let fileURL = written ? url : nil
@@ -671,8 +676,14 @@ final class ScreenCapturer: ObservableObject {
         let fmt = settings.imageFormat
         // JPEG/BMP không có kênh trong suốt: đặt ảnh lên nền gốc của các góc đã
         // đục để góc giữ đúng nền trên màn hình thay vì lót trắng.
-        let image = fmt.keepsTransparency ? cgImage
-            : backdrop.flatMap { RoundedCorners.flatten(cgImage, over: $0) } ?? cgImage
+        var image = cgImage
+        if !fmt.keepsTransparency, let backdrop {
+            guard let flat = RoundedCorners.flatten(cgImage, over: backdrop) else {
+                throw NSError(domain: "SlopShot", code: 4,
+                              userInfo: [NSLocalizedDescriptionKey: "Couldn't restore the corner background."])
+            }
+            image = flat
+        }
         guard let data = fmt.encode(image) else {
             throw NSError(domain: "SlopShot", code: 4,
                           userInfo: [NSLocalizedDescriptionKey: "Couldn't encode the image."])
@@ -755,7 +766,8 @@ final class ScreenCapturer: ObservableObject {
         }
         guard item.kind == .image, let url = item.fileURL,
               let img = NSImage(contentsOf: url) else { return }
-        editor.open(image: img, sourceURL: url)
+        editor.open(image: img, sourceURL: url,
+                    backdrop: NSImage(contentsOf: TempFiles.backdropURL(for: url)))
     }
 
     // ═══════════════════════════════════════════════════════════════════════
