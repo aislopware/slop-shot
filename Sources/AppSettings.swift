@@ -52,14 +52,16 @@ final class AppSettings: ObservableObject {
             guard let dest = CGImageDestinationCreateWithData(
                 data, utType.identifier as CFString, 1, nil) else { return nil }
             let options = isLossy ? [kCGImageDestinationLossyCompressionQuality: 0.9] : [:]
-            CGImageDestinationAddImage(dest, hasAlpha ? cg : Self.opaque(cg), options as CFDictionary)
+            CGImageDestinationAddImage(dest, keepsTransparency ? cg : Self.opaque(cg), options as CFDictionary)
             guard CGImageDestinationFinalize(dest) else { return nil }
             return data as Data
         }
 
-        /// JPEG, BMP không giữ được độ trong suốt: phần trong suốt (góc bo đã
-        /// đục) sẽ thành đen, nên lót nền trắng trước khi ghi.
-        private var hasAlpha: Bool { self != .jpeg && self != .bmp }
+        /// JPEG, BMP không giữ được độ trong suốt. Ảnh chụp mới với định dạng
+        /// này không bị đục góc (xem `ScreenCapturer.clipRoundedCorners`); ảnh
+        /// trong suốt có sẵn (dán vào editor, lịch sử cũ) thì lót nền trắng,
+        /// không thì phần trong suốt thành đen.
+        var keepsTransparency: Bool { self != .jpeg && self != .bmp }
 
         private static func opaque(_ cg: CGImage) -> CGImage {
             switch cg.alphaInfo {

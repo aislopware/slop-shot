@@ -847,9 +847,11 @@ final class ScreenCapturer: ObservableObject {
     /// Khung chọn bám đúng 1 item bo góc (menu, panel, thẻ…) thì phần nền lọt
     /// vào 4 góc được đục trong suốt. Không thấy góc bo nào thì giữ nguyên ảnh.
     /// Chỉ gọi khi khung có bắt dính (`RegionSelection.snapped`): kéo tay với
-    /// ⌥/⇧ hay tắt bắt dính là muốn đúng khung mình kéo.
+    /// ⌥/⇧ hay tắt bắt dính là muốn đúng khung mình kéo. Lưu JPEG/BMP thì giữ
+    /// nguyên nền ở góc: định dạng đó không có kênh trong suốt.
     private func clipRoundedCorners(_ cropped: CGImage, rect: CGRect) -> CGImage {
-        RoundedCorners.clip(cropped, scale: CGFloat(cropped.width) / max(rect.width, 1))
+        guard settings.imageFormat.keepsTransparency else { return cropped }
+        return RoundedCorners.clip(cropped, scale: CGFloat(cropped.width) / max(rect.width, 1))
     }
 
     // Chụp lại màn hình rồi CẮT đúng vùng `rect` — đường lui khi không có ảnh
