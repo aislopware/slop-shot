@@ -134,6 +134,9 @@ struct EditorView: View {
 
     // Ảnh nền để @State được vì flip/rotate sẽ thay nó bằng ảnh đã biến đổi.
     @State private var image: NSImage
+    // Nền gốc ở các góc bo đã đục; lật/xoay cùng `image`. Chỉ dùng khi Save As
+    // định dạng không có kênh trong suốt (JPEG, BMP).
+    @State private var backdrop: NSImage?
     @State private var zoom: CGFloat = 1               // 1 = vừa khung (fit); >1 phóng to
     @State private var zoomBase: CGFloat = 1           // zoom lúc bắt đầu pinch (neo cử chỉ)
     @State private var annotations: [Annotation] = []
@@ -170,9 +173,10 @@ struct EditorView: View {
     @State private var escArmed = false
     @FocusState private var textFocused: Bool
 
-    init(image: NSImage, sourceURL: URL?, onClose: (() -> Void)? = nil,
+    init(image: NSImage, sourceURL: URL?, backdrop: NSImage? = nil, onClose: (() -> Void)? = nil,
          onDirtyChange: ((Bool) -> Void)? = nil, inline: InlineEditHost? = nil) {
         _image = State(initialValue: image)
+        _backdrop = State(initialValue: backdrop)
         self.sourceURL = sourceURL
         self.onClose = onClose
         self.onDirtyChange = onDirtyChange
@@ -1230,6 +1234,10 @@ struct EditorView: View {
         guard let cg = ImageOps.cg(image),
               let out = ImageOps.flip(cg, horizontal: horizontal) else { return }
         image = ImageOps.ns(out, scale: image.size.width / CGFloat(cg.width))
+        backdrop = backdrop.flatMap { b in
+            ImageOps.cg(b).flatMap { ImageOps.flip($0, horizontal: horizontal) }
+                .map { ImageOps.ns($0, scale: image.size.width / CGFloat($0.width)) }
+        }
         // Toạ độ dò sẵn lệch hết sau khi lật → dò lại từ đầu.
         pendingMatches = []; redactedMatches = []; redactHint = 0
         for i in annotations.indices {
@@ -1247,6 +1255,10 @@ struct EditorView: View {
         guard let cg = ImageOps.cg(image),
               let out = ImageOps.rotate90(cg, clockwise: clockwise) else { return }
         image = ImageOps.ns(out, scale: image.size.width / CGFloat(cg.width))
+        backdrop = backdrop.flatMap { b in
+            ImageOps.cg(b).flatMap { ImageOps.rotate90($0, clockwise: clockwise) }
+                .map { ImageOps.ns($0, scale: image.size.width / CGFloat($0.width)) }
+        }
         // Như flipBase: xoay xong toạ độ cũ vô nghĩa.
         pendingMatches = []; redactedMatches = []; redactHint = 0
         for i in annotations.indices {
@@ -1511,12 +1523,16 @@ struct EditorView: View {
 
     // ── Export at full resolution ──────────────────────────────────────────
     // Ảnh nền + mọi annotation, bẹp thành một lớp, ở thời điểm `time`.
-    private func flattened(time: Double) -> some View {
+    private func flattened(time: Double, backdrop: NSImage? = nil) -> some View {
         // Chụp giá trị RA TRƯỚC: closure của Canvas chạy lúc ImageRenderer vẽ, khi
         // đó đọc thẳng @State có thể ra mảng rỗng (gọi từ key monitor — ⌘C của
         // editor inline — thì ảnh xuất ra mất sạch nét vẽ).
         let px = image.size, base = image, anns = annotations, unit = unit
         return ZStack {
+            if let backdrop {
+                Image(nsImage: backdrop).resizable().interpolation(.high)
+                    .frame(width: px.width, height: px.height)
+            }
             Image(nsImage: base).resizable().interpolation(.high)
                 .frame(width: px.width, height: px.height)
             Canvas { ctx, _ in
@@ -1530,9 +1546,9 @@ struct EditorView: View {
     }
 
     @MainActor
-    private func renderImage() -> NSImage? {
+    private func renderImage(opaque: Bool = false) -> NSImage? {
         editingID = nil
-        let renderer = ImageRenderer(content: flattened(time: 0))
+        let renderer = ImageRenderer(content: flattened(time: 0, backdrop: opaque ? backdrop : nil))
         renderer.scale = 1
         return renderer.nsImage
     }
@@ -1699,8 +1715,10 @@ struct EditorView: View {
             return
         }
         // Định dạng tĩnh: bẹp về frame đầu, giống hệt trước giờ.
-        guard let img = renderImage(),
-              let data = encode(img, as: accessory.selectedFileType) else {
+        // JPEG/BMP không có kênh trong suốt: góc bo đã đục lấy lại nền gốc.
+        let type = accessory.selectedFileType
+        guard let img = renderImage(opaque: type == .jpeg || type == .bmp),
+              let data = encode(img, as: type) else {
             status = "Export failed"; return
         }
         write(data, to: url)

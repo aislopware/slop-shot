@@ -21,8 +21,9 @@ enum RoundedCorners {
     /// Chênh lệch tối đa (theo kênh) vẫn coi là cùng màu nền.
     private static let tolerance = 8
 
-    /// `top` vẽ đè lên `backdrop` (cùng kích thước), ra ảnh không trong suốt:
-    /// góc đã đục lấy lại nền gốc, nét vẽ thêm trên `top` vẫn giữ.
+    /// `top` vẽ đè lên `backdrop` (cùng kích thước), ra ảnh không trong suốt.
+    /// Với `backdrop` = `plate` của `clip`, ảnh đã đục đặt lên nó ra đúng ảnh
+    /// gốc, còn nét vẽ thêm trên `top` vẫn giữ.
     static func flatten(_ top: CGImage, over backdrop: CGImage) -> CGImage? {
         guard top.width == backdrop.width, top.height == backdrop.height else { return nil }
         let space = backdrop.colorSpace.flatMap { $0.model == .rgb ? $0 : nil }
@@ -36,13 +37,19 @@ enum RoundedCorners {
         return ctx.makeImage()
     }
 
-    /// Ảnh với các góc bo đã trong suốt; không góc nào bo thì trả lại đúng `cg`.
+    /// Ảnh với các góc bo đã trong suốt; không góc nào bo thì trả lại đúng `cg`
+    /// và `plate` = nil. `plate` là ảnh gốc với các pixel đã đục thay bằng màu
+    /// nền: `image` đặt lên `plate` ra lại đúng `cg` (dùng khi lưu JPEG/BMP).
     /// `scale` = pixel trên mỗi point, để giới hạn bán kính theo point.
     static func clip(_ cg: CGImage, scale: CGFloat) -> CGImage {
+        clipWithPlate(cg, scale: scale).image
+    }
+
+    static func clipWithPlate(_ cg: CGImage, scale: CGFloat) -> (image: CGImage, plate: CGImage?) {
         let w = cg.width, h = cg.height
         let maxRadius = Int((32 * max(scale, 1)).rounded())
         let cap = min(maxRadius, min(w, h) / 2 - 2)
-        guard cap >= 3 else { return cg }
+        guard cap >= 3 else { return (cg, nil) }
 
         let space = cg.colorSpace.flatMap { $0.model == .rgb ? $0 : nil }
             ?? CGColorSpace(name: CGColorSpace.sRGB)!
@@ -50,27 +57,34 @@ enum RoundedCorners {
         guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
                                   bytesPerRow: bpr, space: space,
                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
-              let data = ctx.data else { return cg }
+              let data = ctx.data,
+              let plateCtx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
+                                       bytesPerRow: bpr, space: space,
+                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let plateData = plateCtx.data else { return (cg, nil) }
         ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        plateCtx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
         // Bitmap context xếp hàng 0 = hàng TRÊN cùng của ảnh.
         let px = data.bindMemory(to: UInt8.self, capacity: h * bpr)
+        let plate = plateData.bindMemory(to: UInt8.self, capacity: h * bpr)
 
         var changed = false
         for (sx, sy) in [(1, 1), (-1, 1), (1, -1), (-1, -1)] {
-            let corner = Corner(px: px, w: w, h: h, sx: sx, sy: sy)
+            let corner = Corner(px: px, plate: plate, w: w, h: h, sx: sx, sy: sy)
             if let shape = corner.detect(cap: cap) {
                 corner.cut(shape)
                 changed = true
             }
         }
-        guard changed else { return cg }
-        return ctx.makeImage() ?? cg
+        guard changed, let out = ctx.makeImage() else { return (cg, nil) }
+        return (out, plateCtx.makeImage())
     }
 
     /// 1 góc của ảnh, đọc trong hệ toạ độ riêng: (0,0) là pixel ở góc, x đi
     /// dọc mép ngang vào trong, y đi dọc mép dọc vào trong.
     private struct Corner {
         let px: UnsafeMutablePointer<UInt8>
+        let plate: UnsafeMutablePointer<UInt8>
         let w: Int, h: Int
         let sx: Int, sy: Int
 
@@ -283,6 +297,7 @@ enum RoundedCorners {
         /// Ghi pixel với độ phủ `a`. Premultiplied: a·F = p − (1−a)·B.
         private func write(_ x: Int, _ y: Int, _ a: Double, _ bg: (Int, Int, Int)) {
             let o = offset(x, y)
+            plate[o] = UInt8(bg.0); plate[o + 1] = UInt8(bg.1); plate[o + 2] = UInt8(bg.2); plate[o + 3] = 255
             guard a > 0.02 else {
                 px[o] = 0; px[o + 1] = 0; px[o + 2] = 0; px[o + 3] = 0
                 return

@@ -12,11 +12,12 @@ final class EditorWindowController: NSObject, NSWindowDelegate {
     /// Editor đang mở có nét vẽ chưa chép/lưu ra đâu.
     private(set) var hasUnsavedAnnotations = false
 
-    func open(image: NSImage, sourceURL: URL?) {
+    /// `backdrop`: nền gốc ở các góc bo đã đục, để Save As JPEG/BMP giữ lại nền đó.
+    func open(image: NSImage, sourceURL: URL?, backdrop: NSImage? = nil) {
         window?.close()
         hasUnsavedAnnotations = false
 
-        let root = EditorView(image: image, sourceURL: sourceURL,
+        let root = EditorView(image: image, sourceURL: sourceURL, backdrop: backdrop,
                               onClose: { [weak self] in self?.window?.close() },
                               onDirtyChange: { [weak self] in self?.hasUnsavedAnnotations = $0 })
         let host = NSHostingView(rootView: root)
