@@ -21,7 +21,8 @@ enum RoundedCorners {
     /// Chênh lệch tối đa (theo kênh) vẫn coi là cùng màu nền.
     private static let tolerance = 8
 
-    /// `top` vẽ đè lên `backdrop` (cùng kích thước), ra ảnh không trong suốt.
+    /// `top` vẽ đè lên `backdrop` (cùng kích thước), ra ảnh không trong suốt;
+    /// chỗ nào cả hai đều trong suốt thì lót trắng.
     /// Với `backdrop` = `plate` của `clip`, ảnh đã đục đặt lên nó ra đúng ảnh
     /// gốc, còn nét vẽ thêm trên `top` vẫn giữ.
     static func flatten(_ top: CGImage, over backdrop: CGImage) -> CGImage? {
@@ -32,14 +33,17 @@ enum RoundedCorners {
                                   bytesPerRow: 0, space: space,
                                   bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
         let rect = CGRect(x: 0, y: 0, width: top.width, height: top.height)
+        ctx.setFillColor(CGColor(gray: 1, alpha: 1))
+        ctx.fill(rect)
         ctx.draw(backdrop, in: rect)
         ctx.draw(top, in: rect)
         return ctx.makeImage()
     }
 
     /// Ảnh với các góc bo đã trong suốt; không góc nào bo thì trả lại đúng `cg`
-    /// và `plate` = nil. `plate` là ảnh gốc với các pixel đã đục thay bằng màu
+    /// và `plate` = nil. `plate` trong suốt trừ các pixel đã đục, ở đó là màu
     /// nền: `image` đặt lên `plate` ra lại đúng `cg` (dùng khi lưu JPEG/BMP).
+    /// Không dựng được plate thì vẫn trả ảnh đã đục, `plate` = nil.
     /// `scale` = pixel trên mỗi point, để giới hạn bán kính theo point.
     static func clip(_ cg: CGImage, scale: CGFloat) -> CGImage {
         clipWithPlate(cg, scale: scale).image
@@ -68,16 +72,17 @@ enum RoundedCorners {
             let corner = Corner(px: px, w: w, h: h, sx: sx, sy: sy)
             return corner.detect(cap: cap).map { (corner, $0) }
         }
-        guard !found.isEmpty,
-              let plateCtx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
-                                       bytesPerRow: bpr, space: space,
-                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
-              let plateData = plateCtx.data else { return (cg, nil) }
-        plateCtx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
-        let plate = plateData.bindMemory(to: UInt8.self, capacity: h * bpr)
+        guard !found.isEmpty else { return (cg, nil) }
+        // Plate chỉ chứa đúng các pixel bị đục, còn lại trong suốt: ảnh gốc
+        // không nằm trong đó, nên chỗ đã bôi/che trong editor không lộ ra lại.
+        let plateCtx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
+                                 bytesPerRow: bpr, space: space,
+                                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        plateCtx?.clear(CGRect(x: 0, y: 0, width: w, height: h))
+        let plate = plateCtx?.data?.bindMemory(to: UInt8.self, capacity: h * bpr)
         for (corner, shape) in found { corner.cut(shape, plate: plate) }
-        guard let out = ctx.makeImage(), let plateImage = plateCtx.makeImage() else { return (cg, nil) }
-        return (out, plateImage)
+        guard let out = ctx.makeImage() else { return (cg, nil) }
+        return (out, plate == nil ? nil : plateCtx?.makeImage())
     }
 
     /// 1 góc của ảnh, đọc trong hệ toạ độ riêng: (0,0) là pixel ở góc, x đi
@@ -199,9 +204,9 @@ enum RoundedCorners {
         }
 
         /// Đục nền thành trong suốt, tách lại độ phủ ở rìa khử răng cưa.
-        /// `plate`: bản sao ảnh gốc; pixel rìa được ghi màu nền vào đó để ảnh đã
-        /// đục đặt lên ra lại đúng pixel gốc.
-        func cut(_ s: Shape, plate: UnsafeMutablePointer<UInt8>) {
+        /// `plate`: bitmap trong suốt; mỗi pixel bị đục được ghi vào đó màu nền
+        /// sao cho ảnh đã đục đặt lên ra lại đúng pixel gốc.
+        func cut(_ s: Shape, plate: UnsafeMutablePointer<UInt8>?) {
             let side = s.side, bg = s.bg
             let tol = Double(RoundedCorners.tolerance)
 
@@ -297,10 +302,14 @@ enum RoundedCorners {
 
         /// Ghi pixel với độ phủ `a`. Premultiplied: a·F = p − (1−a)·B.
         private func write(_ x: Int, _ y: Int, _ a: Double, _ bg: (Int, Int, Int),
-                           plate: UnsafeMutablePointer<UInt8>) {
+                           plate: UnsafeMutablePointer<UInt8>?) {
             let o = offset(x, y)
             guard a > 0.02 else {
-                // Đục hẳn: plate giữ nguyên pixel gốc (nền có thể hơi loang).
+                // Đục hẳn: plate lấy đúng pixel gốc (nền có thể hơi loang).
+                if let plate {
+                    for c in 0..<3 { plate[o + c] = px[o + c] }
+                    plate[o + 3] = 255
+                }
                 px[o] = 0; px[o + 1] = 0; px[o + 2] = 0; px[o + 3] = 0
                 return
             }
@@ -312,11 +321,11 @@ enum RoundedCorners {
                 px[o + c] = f
                 // Plate = nền sao cho f + (1−a)·plate ra lại đúng p, kể cả khi f bị
                 // kẹp (pixel không nằm đúng trên đường nền → màu item).
-                plate[o + c] = ar < 0.995
+                plate?[o + c] = ar < 0.995
                     ? UInt8(max(0, min(255, (p - Double(f)) / (1 - ar))).rounded()) : UInt8(b)
             }
             px[o + 3] = alpha
-            plate[o + 3] = 255
+            plate?[o + 3] = 255
         }
     }
 }

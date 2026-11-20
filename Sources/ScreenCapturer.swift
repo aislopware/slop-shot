@@ -638,12 +638,7 @@ final class ScreenCapturer: ObservableObject {
         Task {
             let written = await Task.detached(priority: .userInitiated) {
                 guard let data = AppSettings.ImageFormat.png.encode(cgImage) else { return false }
-                guard (try? data.write(to: url)) != nil else { return false }
-                // Nền góc bo cạnh file tạm, để mở lại từ History rồi lưu JPEG vẫn có.
-                if let backdrop, let plate = AppSettings.ImageFormat.png.encode(backdrop) {
-                    try? plate.write(to: TempFiles.backdropURL(for: url))
-                }
-                return true
+                return (try? data.write(to: url)) != nil
             }.value
             if !written { try? FileManager.default.removeItem(at: url) }
             let fileURL = written ? url : nil
@@ -653,6 +648,15 @@ final class ScreenCapturer: ObservableObject {
                 let pb = NSPasteboard.general
                 pb.clearContents()
                 pb.writeObjects(fileURL.map { [nsImage, $0 as NSURL] } ?? [nsImage])
+            }
+            // Nền góc bo cạnh file tạm, để mở lại từ History rồi lưu JPEG vẫn có.
+            // Ghi sau clipboard để ⌘C không phải chờ; hỏng thì chỉ mất nền góc.
+            if let fileURL, let backdrop {
+                await Task.detached(priority: .utility) {
+                    if let plate = AppSettings.ImageFormat.png.encode(backdrop) {
+                        try? plate.write(to: TempFiles.backdropURL(for: fileURL))
+                    }
+                }.value
             }
             history.add(kind: .image, fileURL: fileURL, text: nil, subtitle: subtitle, image: nsImage)
         }

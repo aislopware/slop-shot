@@ -117,6 +117,7 @@ final class CaptureHistory: ObservableObject {
     func remove(_ item: HistoryItem) {
         items.removeAll { $0.id == item.id }
         try? FileManager.default.removeItem(at: thumbsDir.appendingPathComponent(item.thumbFileName))
+        removeBackdrop(of: item)
         thumbCache[item.id] = nil
         save()
     }
@@ -124,6 +125,7 @@ final class CaptureHistory: ObservableObject {
     func clear() {
         for item in items {
             try? FileManager.default.removeItem(at: thumbsDir.appendingPathComponent(item.thumbFileName))
+            removeBackdrop(of: item)
         }
         items.removeAll()
         thumbCache.removeAll()
@@ -140,10 +142,18 @@ final class CaptureHistory: ObservableObject {
     }
 
     // ── Riêng tư ────────────────────────────────────────────────────────────
+    // Nền góc bo chỉ History đọc (xem `TempFiles.backdropURL`); file PNG chính
+    // giữ lại vì clipboard có thể còn trỏ tới nó.
+    private func removeBackdrop(of item: HistoryItem) {
+        guard let url = item.fileURL else { return }
+        try? FileManager.default.removeItem(at: TempFiles.backdropURL(for: url))
+    }
+
     private func trim() {
         guard items.count > maxItems else { return }
         for item in items[maxItems...] {
             try? FileManager.default.removeItem(at: thumbsDir.appendingPathComponent(item.thumbFileName))
+            removeBackdrop(of: item)
             thumbCache[item.id] = nil
         }
         items = Array(items.prefix(maxItems))
