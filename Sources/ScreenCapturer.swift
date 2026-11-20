@@ -649,16 +649,17 @@ final class ScreenCapturer: ObservableObject {
                 pb.clearContents()
                 pb.writeObjects(fileURL.map { [nsImage, $0 as NSURL] } ?? [nsImage])
             }
+            history.add(kind: .image, fileURL: fileURL, text: nil, subtitle: subtitle, image: nsImage)
             // Nền góc bo cạnh file tạm, để mở lại từ History rồi lưu JPEG vẫn có.
-            // Ghi sau clipboard để ⌘C không phải chờ; hỏng thì chỉ mất nền góc.
+            // Ghi sau clipboard và History để không làm chậm hay đảo thứ tự;
+            // hỏng thì chỉ mất nền góc khi lưu JPEG/BMP từ History.
             if let fileURL, let backdrop {
-                await Task.detached(priority: .utility) {
+                Task.detached(priority: .utility) {
                     if let plate = AppSettings.ImageFormat.png.encode(backdrop) {
                         try? plate.write(to: TempFiles.backdropURL(for: fileURL))
                     }
-                }.value
+                }
             }
-            history.add(kind: .image, fileURL: fileURL, text: nil, subtitle: subtitle, image: nsImage)
         }
     }
 

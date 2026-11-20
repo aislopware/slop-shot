@@ -145,7 +145,8 @@ final class CaptureHistory: ObservableObject {
     // Nền góc bo chỉ History đọc (xem `TempFiles.backdropURL`); file PNG chính
     // giữ lại vì clipboard có thể còn trỏ tới nó.
     private func removeBackdrop(of item: HistoryItem) {
-        guard let url = item.fileURL else { return }
+        // Bản ghi màn hình có thể trùng tên gốc với ảnh chụp cùng giây.
+        guard item.kind == .image, let url = item.fileURL else { return }
         try? FileManager.default.removeItem(at: TempFiles.backdropURL(for: url))
     }
 
