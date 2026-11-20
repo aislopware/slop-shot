@@ -4,6 +4,19 @@ Sinh từ commit log bằng [git-cliff](https://git-cliff.org). Mục nào nằm
 loại (type) của commit quyết định — tức quyết định lúc VIẾT commit, không phải lúc cắt
 release. Quy ước được `scripts/check-commit-msg.sh` chặn ngay ở hook commit-msg.
 
+## [0.12.0](https://github.com/aislopware/slop-shot/compare/v0.11.3...v0.12.0) — 2026-11-20
+
+### Features
+
+- Clear the rounded corners of a snapped item ([`e03a0c3`](https://github.com/aislopware/slop-shot/commit/e03a0c3cb85371ab60c3d3d037329f7d66713410))
+
+### Bug fixes
+
+- Keep an item's border when the frame snaps to it ([`6fe5143`](https://github.com/aislopware/slop-shot/commit/6fe51432ade53ea232cd50e0c284dfede1c2967c))
+- Keep borders when dragging an edge to snap ([`1fe5f7d`](https://github.com/aislopware/slop-shot/commit/1fe5f7d72f7119ab1af55b0adcd89af3dc659772))
+- Keep stroke pixels opaque when clearing rounded corners ([`4626c4e`](https://github.com/aislopware/slop-shot/commit/4626c4e8751f8f607f80bfe3e68295bb4b3a3527))
+- Leave corners alone on a frame dragged without snapping ([`e439c11`](https://github.com/aislopware/slop-shot/commit/e439c11e0b722da03cf4e4876b662ef75d0fbf03))
+
 ## [0.11.3](https://github.com/aislopware/slop-shot/compare/v0.11.2...v0.11.3) — 2026-11-03
 
 ### Bug fixes
